@@ -28,74 +28,74 @@ public class Config {
     public static final ModConfigSpec.ConfigValue<Boolean> ALLOW_OTHER_PLAYER_INTERACTION;
 
     static {
-        BUILDER.comment("Ollama LLM Configuration").push("ollama");
+        BUILDER.comment("Configuração do Ollama").push("ollama");
 
         OLLAMA_HOST = BUILDER
-                .comment("Ollama server hostname or IP address")
-                .define("host", "192.168.70.24");
+                .comment("Hostname ou IP do servidor Ollama")
+                .define("host", "127.0.0.1");
 
         OLLAMA_PORT = BUILDER
-                .comment("Ollama server port")
+                .comment("Porta do servidor Ollama")
                 .defineInRange("port", 11434, 1, 65535);
 
         OLLAMA_MODEL = BUILDER
-                .comment("Ollama model to use (e.g., llama3:8b, mistral:7b, gemma:2b)")
+                .comment("Modelo do Ollama a usar (ex.: llama3:8b, mistral:7b, gemma:2b)")
                 .define("model", "llama3:8b");
 
         OLLAMA_TIMEOUT = BUILDER
-                .comment("Request timeout in seconds")
+                .comment("Tempo limite da requisição em segundos")
                 .defineInRange("timeout", 30, 5, 300);
 
         BUILDER.pop();
 
-        BUILDER.comment("Companion Behavior").push("companion");
+        BUILDER.comment("Comportamento do companion").push("companion");
 
         MAX_COMPANIONS_PER_PLAYER = BUILDER
-                .comment("Maximum number of AI companions per player")
+                .comment("Número máximo de companions por jogador")
                 .defineInRange("maxPerPlayer", 3, 1, 10);
 
         COMPANIONS_TAKE_DAMAGE = BUILDER
-                .comment("Whether companions can take damage")
+                .comment("Se os companions podem receber dano")
                 .define("takeDamage", true);
 
         COMPANIONS_NEED_FOOD = BUILDER
-                .comment("Whether companions need food (hunger system)")
+                .comment("Se os companions precisam de comida (sistema de fome)")
                 .define("needFood", false);
 
         COMPANION_FOLLOW_DISTANCE = BUILDER
-                .comment("Default follow distance from owner")
+                .comment("Distância padrão para seguir o dono")
                 .defineInRange("followDistance", 5.0, 1.0, 50.0);
 
         ITEM_PICKUP_RADIUS = BUILDER
-                .comment("Radius in blocks for item pickup")
+                .comment("Raio em blocos para pegar itens")
                 .defineInRange("itemPickupRadius", 3, 0, 10);
 
         COMPANIONS_LOAD_CHUNKS = BUILDER
-                .comment("Whether companions force-load their chunk (allows them to work when players are offline)")
+                .comment("Se os companions mantêm o chunk carregado (permite trabalhar offline)")
                 .define("loadChunks", true);
 
         ACTION_LOOP_ENABLED = BUILDER
-                .comment("Enable iterative action loop: companions can query (scan, status, inventory) then decide what to do")
+                .comment("Ativa o loop iterativo de ações: o companion pode consultar e depois decidir o que fazer")
                 .define("actionLoopEnabled", true);
 
         ACTION_LOOP_MAX_ITERATIONS = BUILDER
-                .comment("Maximum iterations per action loop (1 = single-shot like before)")
+                .comment("Número máximo de iterações por loop de ação (1 = resposta única)")
                 .defineInRange("actionLoopMaxIterations", 3, 1, 10);
 
         BUILDER.pop();
 
-        BUILDER.comment("Chat Settings").push("chat");
+        BUILDER.comment("Configurações de chat").push("chat");
 
         CHAT_PREFIX = BUILDER
-                .comment("Prefix to address companions in chat (e.g., '@companion')")
+                .comment("Prefixo para falar com companions no chat (ex.: '@companion')")
                 .define("prefix", "@");
 
         BROADCAST_COMPANION_CHAT = BUILDER
-                .comment("Whether to broadcast companion responses to all nearby players")
+                .comment("Se as respostas do companion devem ser mostradas para jogadores próximos")
                 .define("broadcastChat", true);
 
         ALLOW_OTHER_PLAYER_INTERACTION = BUILDER
-                .comment("Whether other players (not the owner) can talk to and command companions")
+                .comment("Se outros jogadores (não o dono) podem conversar e dar comandos aos companions")
                 .define("allowOtherPlayerInteraction", true);
 
         BUILDER.pop();

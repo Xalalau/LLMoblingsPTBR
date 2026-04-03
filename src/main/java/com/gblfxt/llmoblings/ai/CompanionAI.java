@@ -127,7 +127,7 @@ public class CompanionAI {
     public void processMessage(String message, Player sender) {
         if ((pendingAction != null && !pendingAction.isDone()) ||
             (pendingLoopFuture != null && !pendingLoopFuture.isDone())) {
-            sendMessageTo(sender, "I'm still thinking about your last request...");
+            sendMessageTo(sender, "Ainda estou pensando no seu último pedido...");
             return;
         }
 
@@ -136,7 +136,7 @@ public class CompanionAI {
 
         LLMoblings.LOGGER.info("[{}] Processing message from {}: {}", companion.getCompanionName(),
                 sender != null ? sender.getName().getString() : "unknown", message);
-        sendMessageToAll("Thinking...");
+        sendMessageToAll("Pensando...");
 
         if (Config.ACTION_LOOP_ENABLED.get()) {
             processMessageWithLoop(message, sender);
@@ -202,11 +202,11 @@ public class CompanionAI {
                     // Query result — feed back to LLM for next iteration
                     ollamaClient.addSystemObservation(result.resultText());
                     messagesAdded += 1; // observation message
-                    currentMessage = "[Continue based on the observation above.]";
+                    currentMessage = "[Continue com base na observação acima.]";
                 }
             } catch (Exception e) {
                 LLMoblings.LOGGER.error("[{}] Action loop error: ", companion.getCompanionName(), e);
-                scheduleMainThread(() -> sendMessage("Sorry, I got confused mid-thought."));
+                scheduleMainThread(() -> sendMessage("Desculpa, me perdi no meio do raciocínio."));
             } finally {
                 // Compact history to avoid consuming the 20-message window
                 if (messagesAdded > 2) {
@@ -262,7 +262,7 @@ public class CompanionAI {
     public void processMessageFromStranger(Player stranger, String message) {
         if ((pendingAction != null && !pendingAction.isDone()) ||
             (pendingLoopFuture != null && !pendingLoopFuture.isDone())) {
-            sendMessageTo(stranger, "I'm still thinking about something...");
+            sendMessageTo(stranger, "Ainda estou pensando em outra coisa...");
             return;
         }
 
@@ -270,10 +270,10 @@ public class CompanionAI {
                 companion.getCompanionName(), stranger.getName().getString(), message);
 
         // For strangers, we add context that this is not the owner
-        String contextMessage = "[A player named " + stranger.getName().getString() +
-                " (not my owner) says: " + message + ". I should be friendly but I only take commands from my owner.]";
+        String contextMessage = "[Um jogador chamado " + stranger.getName().getString() +
+                " (não é meu dono) disse: " + message + ". Eu devo ser amigável, mas só aceito comandos do meu dono.]";
 
-        sendMessageToAll("Hmm?");
+        sendMessageToAll("Hm?");
         pendingAction = ollamaClient.chat(contextMessage);
     }
 
@@ -315,120 +315,120 @@ public class CompanionAI {
                 String detail = action.getString("detail", "full");
                 String target = action.getString("target", "");
                 handleCobblestatsCommand(detail, target);
-                return ActionResult.query("cobblestats", "Pokemon stats reported to chat");
+                return ActionResult.query("cobblestats", "Estatísticas do Pokémon enviadas no chat");
             }
 
             // --- Terminal actions (loop stops) ---
             case "follow" -> {
                 startFollowing();
-                return ActionResult.terminal("follow", "Now following");
+                return ActionResult.terminal("follow", "Agora estou seguindo");
             }
             case "stay", "stop" -> {
                 stopAndStay();
-                return ActionResult.terminal("stay", "Staying put");
+                return ActionResult.terminal("stay", "Agora estou parado no lugar");
             }
             case "goto" -> {
                 int x = action.getInt("x", (int) companion.getX());
                 int y = action.getInt("y", (int) companion.getY());
                 int z = action.getInt("z", (int) companion.getZ());
                 goTo(new BlockPos(x, y, z));
-                return ActionResult.terminal("goto", "Going to " + x + ", " + y + ", " + z);
+                return ActionResult.terminal("goto", "Indo para " + x + ", " + y + ", " + z);
             }
             case "come" -> {
                 comeToOwner();
-                return ActionResult.terminal("come", "Coming to owner");
+                return ActionResult.terminal("come", "Indo até meu dono");
             }
             case "mine", "gather" -> {
                 String block = action.getString("block", action.getString("item", "stone"));
                 int count = action.getInt("count", 1);
                 startMining(block, count);
-                return ActionResult.terminal("mine", "Started mining " + block);
+                return ActionResult.terminal("mine", "Comecei a minerar " + block);
             }
             case "attack" -> {
                 String target = action.getString("target", "hostile");
                 startAttacking(target);
-                return ActionResult.terminal("attack", "Attacking " + target);
+                return ActionResult.terminal("attack", "Atacando " + target);
             }
             case "defend" -> {
                 startDefending();
-                return ActionResult.terminal("defend", "Defending");
+                return ActionResult.terminal("defend", "Defendendo");
             }
             case "retreat" -> {
                 retreat();
-                return ActionResult.terminal("retreat", "Retreating");
+                return ActionResult.terminal("retreat", "Recuando");
             }
             case "give" -> {
                 String item = action.getString("item", "");
                 int count = action.getInt("count", 1);
                 giveItems(item, count);
-                return ActionResult.terminal("give", "Gave items");
+                return ActionResult.terminal("give", "Entreguei os itens");
             }
             case "explore", "wander", "look around" -> {
                 int radius = action.getInt("radius", 32);
                 startExploring(radius);
-                return ActionResult.terminal("explore", "Exploring");
+                return ActionResult.terminal("explore", "Explorando");
             }
             case "auto", "autonomous", "independent", "survive" -> {
                 int radius = action.getInt("radius", 32);
                 startAutonomous(radius);
-                return ActionResult.terminal("auto", "Going autonomous");
+                return ActionResult.terminal("auto", "Entrando no modo autônomo");
             }
             case "idle" -> {
                 currentState = AIState.IDLE;
-                return ActionResult.terminal("idle", "Idle");
+                return ActionResult.terminal("idle", "Parado");
             }
             case "setbed" -> {
                 findAndSetBed();
-                return ActionResult.terminal("setbed", "Set bed");
+                return ActionResult.terminal("setbed", "Cama definida");
             }
             case "sethome" -> {
                 setHomeHere();
-                return ActionResult.terminal("sethome", "Set home");
+                return ActionResult.terminal("sethome", "Casa definida");
             }
             case "home" -> {
                 goHome();
-                return ActionResult.terminal("home", "Going home");
+                return ActionResult.terminal("home", "Indo para casa");
             }
             case "sleep" -> {
                 tryToSleep();
-                return ActionResult.terminal("sleep", "Trying to sleep");
+                return ActionResult.terminal("sleep", "Tentando dormir");
             }
             case "tpa" -> {
                 String target = action.getString("target", action.getString("player", ""));
                 requestTeleport(target);
-                return ActionResult.terminal("tpa", "Teleporting to " + target);
+                return ActionResult.terminal("tpa", "Teleportando até " + target);
             }
             case "tpaccept" -> {
                 acceptTeleport();
-                return ActionResult.terminal("tpaccept", "Accepted teleport");
+                return ActionResult.terminal("tpaccept", "Teleporte aceito");
             }
             case "tpdeny" -> {
                 denyTeleport();
-                return ActionResult.terminal("tpdeny", "Denied teleport");
+                return ActionResult.terminal("tpdeny", "Teleporte recusado");
             }
             case "portal" -> {
                 String portalAction = action.getString("action", "enter");
                 handlePortalCommand(portalAction);
-                return ActionResult.terminal("portal", "Portal action: " + portalAction);
+                return ActionResult.terminal("portal", "Ação de portal: " + portalAction);
             }
             case "elevator" -> {
                 String direction = action.getString("direction", "up");
                 handleElevatorCommand(direction);
-                return ActionResult.terminal("elevator", "Elevator " + direction);
+                return ActionResult.terminal("elevator", "Elevador " + direction);
             }
             case "equip", "gear", "arm" -> {
                 equipBestGear();
-                return ActionResult.terminal("equip", "Equipped best gear");
+                return ActionResult.terminal("equip", "Equipei meu melhor equipamento");
             }
             case "getgear", "getarmor", "craftgear", "ironset", "meget" -> {
                 String material = action.getString("material", "iron");
                 getGearFromME(material);
-                return ActionResult.terminal("getgear", "Getting " + material + " gear");
+                return ActionResult.terminal("getgear", "Buscando equipamento de " + material);
             }
             case "deposit", "store", "stash", "putaway" -> {
                 boolean keepGear = action.getBoolean("keepGear", true);
                 depositItems(keepGear);
-                return ActionResult.terminal("deposit", "Depositing items");
+                return ActionResult.terminal("deposit", "Depositando itens");
             }
             case "build" -> {
                 String structure = action.getString("structure", "cottage");
@@ -438,31 +438,31 @@ public class CompanionAI {
                 int z = action.getInt("z", (int) companion.getZ());
                 BlockPos location = here ? companion.blockPosition() : new BlockPos(x, y, z);
                 startBuilding(structure, location);
-                return ActionResult.terminal("build", "Building " + structure);
+                return ActionResult.terminal("build", "Construindo " + structure);
             }
             case "pokemon", "buddy", "pokemonbuddy" -> {
                 String subAction = action.getString("subaction", "find");
                 handlePokemonBuddy(subAction, action.getString("name", null));
-                return ActionResult.terminal("pokemon", "Pokemon " + subAction);
+                return ActionResult.terminal("pokemon", "Pokémon: " + subAction);
             }
             case "gadget", "buildinggadget", "gadgets" -> {
                 String subAction = action.getString("subaction", "info");
                 String blockName = action.getString("block", null);
                 int range = action.getInt("range", -1);
                 handleBuildingGadget(subAction, blockName, range);
-                return ActionResult.terminal("gadget", "Gadget " + subAction);
+                return ActionResult.terminal("gadget", "Gadget executado: " + subAction);
             }
             case "backpack", "pack", "bag" -> {
                 String subAction = action.getString("subaction", "info");
                 String itemName = action.getString("item", null);
                 int count = action.getInt("count", -1);
                 handleBackpack(subAction, itemName, count);
-                return ActionResult.terminal("backpack", "Backpack " + subAction);
+                return ActionResult.terminal("backpack", "Mochila: " + subAction);
             }
             default -> {
                 LLMoblings.LOGGER.warn("[{}] Unknown action: {}", companion.getCompanionName(), action.getAction());
                 currentState = AIState.IDLE;
-                return ActionResult.failure(actionName, "Unknown action: " + actionName);
+                return ActionResult.failure(actionName, "Ação desconhecida: " + actionName);
             }
         }
     }
@@ -520,7 +520,7 @@ public class CompanionAI {
                 return;
             }
 
-            sendMessage("I've arrived at the destination.");
+            sendMessage("Cheguei ao destino.");
             currentState = AIState.IDLE;
             targetPos = null;
         } else if (companion.getNavigation().isDone()) {
@@ -540,7 +540,7 @@ public class CompanionAI {
 
         // Check for completion
         if (miningTask.isCompleted()) {
-            sendMessage("Done! I gathered " + miningTask.getMinedCount() + " " + miningTask.getTargetBlockName() + ".");
+            sendMessage("Pronto! Recolhi " + miningTask.getMinedCount() + " de " + miningTask.getTargetBlockName() + ".");
             personality.onTaskComplete();
             miningTask = null;
             currentState = AIState.IDLE;
@@ -563,7 +563,7 @@ public class CompanionAI {
 
         // Progress report every 5 seconds
         if (companion.tickCount % 100 == 0) {
-            sendMessage("Mining " + miningTask.getTargetBlockName() + "... (" +
+            sendMessage("Minerando " + miningTask.getTargetBlockName() + "... (" +
                 miningTask.getMinedCount() + "/" + miningTask.getTargetCount() + ")");
         }
     }
@@ -573,7 +573,7 @@ public class CompanionAI {
             // Find new target
             targetEntity = findAttackTarget();
             if (targetEntity == null) {
-                sendMessage("No more enemies nearby.");
+                sendMessage("Não há mais inimigos por perto.");
                 personality.onTaskComplete();
                 currentState = AIState.IDLE;
                 return;
@@ -684,7 +684,7 @@ public class CompanionAI {
 
         // Check for completion
         if (buildingTask.isCompleted()) {
-            sendMessage("Done! I've finished building the " + buildingTask.getStructureName() + "!");
+            sendMessage("Pronto! Terminei de construir " + buildingTask.getStructureName() + "!");
             personality.onTaskComplete();
             buildingTask = null;
             currentState = AIState.IDLE;
@@ -734,13 +734,13 @@ public class CompanionAI {
     // Action implementations
     private void startFollowing() {
         currentState = AIState.FOLLOWING;
-        sendMessage("Following you!");
+        sendMessage("Vou te seguir!");
     }
 
     private void stopAndStay() {
         currentState = AIState.IDLE;
         companion.getNavigation().stop();
-        sendMessage("Staying here.");
+        sendMessage("Vou ficar aqui.");
     }
 
     private void goTo(BlockPos pos) {
@@ -767,7 +767,7 @@ public class CompanionAI {
         }
 
         currentState = AIState.MINING;
-        sendMessage("Starting to gather " + count + " " + blockType + ". I'll search within 32 blocks.");
+        sendMessage("Vou começar a coletar " + count + " de " + blockType + ". Vou procurar num raio de 32 blocos.");
         personality.onTaskStart("mining");
     }
 
@@ -839,20 +839,20 @@ public class CompanionAI {
 
     private void startDefending() {
         currentState = AIState.DEFENDING;
-        sendMessage("I'll protect you!");
+        sendMessage("Eu vou te proteger!");
     }
 
     private void startAutonomous(int radius) {
         autonomousTask = new AutonomousTask(companion, radius);
         currentState = AIState.AUTONOMOUS;
-        sendMessage("Going autonomous! I'll assess the area, hunt for food, equip myself, and patrol. Tell me to 'stop' or 'follow' to return to normal.");
+        sendMessage("Entrando no modo autônomo. Vou avaliar a área, procurar comida, me equipar e patrulhar. Diga 'parar' ou 'seguir' para eu voltar ao normal.");
     }
 
     private void startExploring(int radius) {
         autonomousTask = new AutonomousTask(companion, radius);
         autonomousTask.setExploring();  // Start directly in explore mode
         currentState = AIState.AUTONOMOUS;
-        sendMessage("I'll explore the area! I can open doors and check out interesting spots.");
+        sendMessage("Vou explorar a área. Posso abrir portas e verificar lugares interessantes.");
     }
 
     private void startBuilding(String structureType, BlockPos location) {
@@ -864,14 +864,14 @@ public class CompanionAI {
         }
 
         if (blueprint == null) {
-            sendMessage("I don't know how to build a " + structureType + ". I can build: cottage");
+            sendMessage("Eu não sei construir " + structureType + ". No momento eu consigo construir: cottage.");
             return;
         }
 
         buildingTask = new BuildingTask(companion, blueprint, location);
         currentState = AIState.BUILDING;
-        sendMessage("Starting to build a " + blueprint.getName() + " at [" +
-                location.getX() + ", " + location.getY() + ", " + location.getZ() + "]! This might take a while.");
+        sendMessage("Começando a construir " + blueprint.getName() + " em [" +
+                location.getX() + ", " + location.getY() + ", " + location.getZ() + "]. Isso pode levar um tempo.");
         personality.onTaskStart("building");
     }
 
@@ -888,7 +888,7 @@ public class CompanionAI {
         // Check if buddy is still valid
         if (pokemonBuddy != null) {
             if (!pokemonBuddy.isAlive() || pokemonBuddy.isRemoved()) {
-                sendMessage("Oh no, " + pokemonBuddyName + " is gone!");
+                sendMessage("Ah não, " + pokemonBuddyName + " sumiu!");
                 pokemonBuddy = null;
                 pokemonBuddyName = null;
                 return;
@@ -918,7 +918,7 @@ public class CompanionAI {
      */
     private void handlePokemonBuddy(String subAction, String targetName) {
         if (!CobblemonIntegration.isCobblemonLoaded()) {
-            sendMessage("I don't see any Pokemon around... is Cobblemon installed?");
+            sendMessage("Não estou vendo nenhum Pokémon por perto... Cobblemon está instalado?");
             return;
         }
 
@@ -936,7 +936,7 @@ public class CompanionAI {
     private void findPokemonBuddy(String targetName) {
         // Already have a buddy?
         if (pokemonBuddy != null && pokemonBuddy.isAlive()) {
-            sendMessage("I already have " + pokemonBuddyName + " with me! Say 'release buddy' first if you want me to find a different one.");
+            sendMessage("Eu já estou com " + pokemonBuddyName + " comigo! Diga 'liberar buddy' primeiro se quiser que eu procure outro.");
             return;
         }
 
@@ -944,7 +944,7 @@ public class CompanionAI {
         Entity foundPokemon = CobblemonIntegration.findNearestPlayerPokemon(companion, 32);
 
         if (foundPokemon == null) {
-            sendMessage("I don't see any of your Pokemon nearby. Send one out and I'll bond with it!");
+            sendMessage("Não vejo nenhum dos seus Pokémon por perto. Solte um e eu vou criar vínculo com ele!");
             return;
         }
 
@@ -973,7 +973,7 @@ public class CompanionAI {
         int level = CobblemonIntegration.getPokemonLevel(foundPokemon);
 
         StringBuilder msg = new StringBuilder();
-        msg.append("Hey there, ");
+        msg.append("Olá, ");
         if (isShiny) {
             msg.append("shiny ");
         }
@@ -990,11 +990,11 @@ public class CompanionAI {
      */
     private void releasePokemonBuddy() {
         if (pokemonBuddy == null) {
-            sendMessage("I don't have a Pokemon buddy right now.");
+            sendMessage("Eu não tenho um Pokémon parceiro agora.");
             return;
         }
 
-        sendMessage("Bye bye, " + CobblemonIntegration.getPokemonDisplayName(pokemonBuddy) + "! It was fun adventuring with you!");
+        sendMessage("Tchau, " + CobblemonIntegration.getPokemonDisplayName(pokemonBuddy) + "! Foi divertido se aventurar com você!");
         pokemonBuddy = null;
         pokemonBuddyName = null;
     }
@@ -1004,14 +1004,14 @@ public class CompanionAI {
      */
     private void checkPokemonBuddy() {
         if (pokemonBuddy == null || !pokemonBuddy.isAlive()) {
-            sendMessage("I don't have a Pokemon buddy right now. Send out one of your Pokemon and tell me to 'find a buddy'!");
+            sendMessage("Eu não tenho um Pokémon parceiro agora. Solte um dos seus Pokémon e peça para eu procurar um parceiro Pokémon!");
             return;
         }
 
         String summary = CobblemonIntegration.getPokemonSummary(pokemonBuddy);
         double distance = companion.distanceTo(pokemonBuddy);
 
-        sendMessage("My buddy " + summary + " is " + (int) distance + " blocks away. We're having a great time!");
+        sendMessage("Meu parceiro " + summary + " está a " + (int) distance + " blocos daqui. Está tudo certo com a gente!");
     }
 
     /**
@@ -1037,7 +1037,7 @@ public class CompanionAI {
      */
     private void handleBuildingGadget(String subAction, String blockName, int range) {
         if (!BuildingGadgetsIntegration.isBuildingGadgetsLoaded()) {
-            sendMessage("Building Gadgets isn't installed. I can't use gadgets without it!");
+            sendMessage("Building Gadgets não está instalado. Eu não consigo usar gadgets sem ele!");
             return;
         }
 
@@ -1058,13 +1058,13 @@ public class CompanionAI {
     private void gadgetInfo() {
         ItemStack gadget = BuildingGadgetsIntegration.findAnyGadget(companion);
         if (gadget.isEmpty()) {
-            sendMessage("I don't have any Building Gadgets. Give me one!");
+            sendMessage("Eu não tenho nenhum Building Gadget. Me dá um!");
             return;
         }
 
         String desc = BuildingGadgetsIntegration.getGadgetDescription(gadget);
         boolean equipped = BuildingGadgetsIntegration.isGadget(companion.getMainHandItem());
-        sendMessage("I have a " + desc + (equipped ? " (equipped)" : " (in inventory)"));
+        sendMessage("Eu tenho " + desc + (equipped ? " (equipado)" : " (no inventário)"));
     }
 
     /**
@@ -1073,15 +1073,15 @@ public class CompanionAI {
     private void equipGadget() {
         if (BuildingGadgetsIntegration.isGadget(companion.getMainHandItem())) {
             String desc = BuildingGadgetsIntegration.getGadgetDescription(companion.getMainHandItem());
-            sendMessage("I already have my " + desc + " equipped!");
+            sendMessage("Eu já estou com meu " + desc + " equipado!");
             return;
         }
 
         if (BuildingGadgetsIntegration.equipGadget(companion)) {
             String desc = BuildingGadgetsIntegration.getGadgetDescription(companion.getMainHandItem());
-            sendMessage("Equipped " + desc + "! Ready to build!");
+            sendMessage("Equipei " + desc + "! Pronto para construir!");
         } else {
-            sendMessage("I don't have any Building Gadgets to equip.");
+            sendMessage("Eu não tenho nenhum Building Gadget para equipar.");
         }
     }
 
@@ -1093,7 +1093,7 @@ public class CompanionAI {
         if (!BuildingGadgetsIntegration.isGadget(gadget)) {
             gadget = BuildingGadgetsIntegration.findBuildingGadget(companion);
             if (gadget.isEmpty()) {
-                sendMessage("I need to hold a Building Gadget first!");
+                sendMessage("Eu preciso segurar um Building Gadget primeiro!");
                 return;
             }
             // Equip it
@@ -1106,9 +1106,9 @@ public class CompanionAI {
             net.minecraft.world.level.block.Block block = BuildingGadgetsIntegration.findBuildableBlock(companion);
             if (block != null) {
                 BuildingGadgetsIntegration.setGadgetBlock(gadget, block.defaultBlockState());
-                sendMessage("Set gadget to place " + BuiltInRegistries.BLOCK.getKey(block).getPath().replace("_", " ") + "!");
+                sendMessage("Configurei o gadget para colocar " + BuiltInRegistries.BLOCK.getKey(block).getPath().replace("_", " ") + "!");
             } else {
-                sendMessage("I don't have any blocks in my inventory to use. Give me some building materials!");
+                sendMessage("Eu não tenho blocos no inventário para usar. Me dá alguns materiais de construção!");
             }
             return;
         }
@@ -1121,9 +1121,9 @@ public class CompanionAI {
         if (blockId != null && BuiltInRegistries.BLOCK.containsKey(blockId)) {
             net.minecraft.world.level.block.Block block = BuiltInRegistries.BLOCK.get(blockId);
             BuildingGadgetsIntegration.setGadgetBlock(gadget, block.defaultBlockState());
-            sendMessage("Set gadget to place " + blockName + "!");
+            sendMessage("Configurei o gadget para colocar " + blockName + "!");
         } else {
-            sendMessage("I don't know what block '" + blockName + "' is.");
+            sendMessage("Eu não sei qual bloco é '" + blockName + "'.");
         }
     }
 
@@ -1135,7 +1135,7 @@ public class CompanionAI {
         if (!BuildingGadgetsIntegration.isGadget(gadget)) {
             gadget = BuildingGadgetsIntegration.findAnyGadget(companion);
             if (gadget.isEmpty()) {
-                sendMessage("I need a Building Gadget first!");
+                sendMessage("Eu preciso de um Building Gadget primeiro!");
                 return;
             }
         }
@@ -1145,9 +1145,9 @@ public class CompanionAI {
         }
 
         if (BuildingGadgetsIntegration.setGadgetRange(gadget, range)) {
-            sendMessage("Set gadget range to " + range + "!");
+            sendMessage("Defini o alcance do gadget para " + range + "!");
         } else {
-            sendMessage("Couldn't set the range on this gadget.");
+            sendMessage("Não consegui definir o alcance desse gadget.");
         }
     }
 
@@ -1158,7 +1158,7 @@ public class CompanionAI {
         ItemStack gadget = companion.getMainHandItem();
         if (!BuildingGadgetsIntegration.isGadget(gadget)) {
             if (!BuildingGadgetsIntegration.equipGadget(companion)) {
-                sendMessage("I don't have any Building Gadgets!");
+                sendMessage("Eu não tenho nenhum Building Gadget!");
                 return;
             }
             gadget = companion.getMainHandItem();
@@ -1175,7 +1175,7 @@ public class CompanionAI {
         }
 
         String desc = BuildingGadgetsIntegration.getGadgetDescription(gadget);
-        sendMessage("Gadget configured! " + desc);
+        sendMessage("Gadget configurado! " + desc);
     }
 
     /**
@@ -1184,23 +1184,23 @@ public class CompanionAI {
     private void useGadgetAtTarget() {
         ItemStack gadget = companion.getMainHandItem();
         if (!BuildingGadgetsIntegration.isGadget(gadget)) {
-            sendMessage("I need to hold a Building Gadget to use it!");
+            sendMessage("Eu preciso segurar um Building Gadget para usar!");
             return;
         }
 
         // Check if gadget has a block set
         net.minecraft.world.level.block.state.BlockState currentBlock = BuildingGadgetsIntegration.getGadgetBlock(gadget);
         if (currentBlock.isAir()) {
-            sendMessage("My gadget doesn't have a block set. Tell me 'gadget set block [blockname]' first!");
+            sendMessage("Meu gadget ainda não tem um bloco definido. Diga 'gadget set block [blockname]' primeiro!");
             return;
         }
 
         // Use at current target or ground in front
         BlockPos targetPos = companion.blockPosition().relative(companion.getDirection());
         if (BuildingGadgetsIntegration.useGadget(companion, targetPos, net.minecraft.core.Direction.UP)) {
-            sendMessage("*uses gadget* Building!");
+            sendMessage("*usa o gadget* Construindo!");
         } else {
-            sendMessage("I couldn't use the gadget here.");
+            sendMessage("Eu não consegui usar o gadget aqui.");
         }
     }
 
@@ -1210,15 +1210,15 @@ public class CompanionAI {
     private void rotateGadgetMode() {
         ItemStack gadget = companion.getMainHandItem();
         if (!BuildingGadgetsIntegration.isGadget(gadget)) {
-            sendMessage("I need to hold a Building Gadget first!");
+            sendMessage("Eu preciso segurar um Building Gadget primeiro!");
             return;
         }
 
         if (BuildingGadgetsIntegration.rotateMode(gadget)) {
             String newMode = BuildingGadgetsIntegration.getModeName(gadget);
-            sendMessage("Switched to " + newMode + " mode!");
+            sendMessage("Troquei para o modo " + newMode + "!");
         } else {
-            sendMessage("Couldn't rotate the mode on this gadget.");
+            sendMessage("Não consegui mudar o modo desse gadget.");
         }
     }
 
@@ -1231,7 +1231,7 @@ public class CompanionAI {
      */
     private void handleBackpack(String subAction, String itemName, int count) {
         if (!SophisticatedBackpacksIntegration.isSophisticatedBackpacksLoaded()) {
-            sendMessage("Sophisticated Backpacks isn't installed. I can't use backpacks without it!");
+            sendMessage("Sophisticated Backpacks não está instalado. Eu não consigo usar mochilas sem ele!");
             return;
         }
 
@@ -1252,12 +1252,12 @@ public class CompanionAI {
     private void backpackInfo() {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack. Give me one and I can carry a lot more stuff!");
+            sendMessage("Eu não tenho mochila. Me dá uma e eu consigo carregar muito mais coisa!");
             return;
         }
 
         String desc = SophisticatedBackpacksIntegration.getBackpackDescription(backpack);
-        sendMessage("I have a " + desc);
+        sendMessage("Eu tenho " + desc);
     }
 
     /**
@@ -1266,7 +1266,7 @@ public class CompanionAI {
     private void storeInBackpack(String itemName) {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack to store items in!");
+            sendMessage("Eu não tenho mochila para guardar itens!");
             return;
         }
 
@@ -1299,9 +1299,9 @@ public class CompanionAI {
         }
 
         if (stored > 0) {
-            sendMessage("Stored " + stored + " " + itemName + " in my backpack!");
+            sendMessage("Guardei " + stored + " de " + itemName + " na minha mochila!");
         } else {
-            sendMessage("I don't have any " + itemName + " to store.");
+            sendMessage("Eu não tenho " + itemName + " para guardar.");
         }
     }
 
@@ -1311,7 +1311,7 @@ public class CompanionAI {
     private void storeAllInBackpack() {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack!");
+            sendMessage("Eu não tenho mochila!");
             return;
         }
 
@@ -1319,9 +1319,9 @@ public class CompanionAI {
 
         if (stored > 0) {
             String desc = SophisticatedBackpacksIntegration.getBackpackDescription(backpack);
-            sendMessage("Stored " + stored + " item stacks in my backpack! " + desc);
+            sendMessage("Guardei " + stored + " pilhas de itens na minha mochila! " + desc);
         } else {
-            sendMessage("Nothing to store - my inventory is already organized.");
+            sendMessage("Nada para guardar: meu inventário já está organizado.");
         }
     }
 
@@ -1331,12 +1331,12 @@ public class CompanionAI {
     private void retrieveFromBackpack(String itemName, int count) {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack!");
+            sendMessage("Eu não tenho mochila!");
             return;
         }
 
         if (itemName == null || itemName.isEmpty()) {
-            sendMessage("What item do you want me to get from my backpack?");
+            sendMessage("Qual item você quer que eu pegue da minha mochila?");
             return;
         }
 
@@ -1381,9 +1381,9 @@ public class CompanionAI {
         }
 
         if (retrieved > 0) {
-            sendMessage("Got " + retrieved + " " + itemName + " from my backpack!");
+            sendMessage("Peguei " + retrieved + " de " + itemName + " da minha mochila!");
         } else {
-            sendMessage("I don't have any " + itemName + " in my backpack.");
+            sendMessage("Eu não tenho " + itemName + " na minha mochila.");
         }
     }
 
@@ -1393,13 +1393,13 @@ public class CompanionAI {
     private void listBackpackContents() {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack!");
+            sendMessage("Eu não tenho mochila!");
             return;
         }
 
         java.util.List<ItemStack> contents = SophisticatedBackpacksIntegration.getBackpackContents(backpack);
         if (contents.isEmpty()) {
-            sendMessage("My backpack is empty!");
+            sendMessage("Minha mochila está vazia!");
             return;
         }
 
@@ -1410,7 +1410,7 @@ public class CompanionAI {
             itemCounts.merge(name, stack.getCount(), Integer::sum);
         }
 
-        StringBuilder sb = new StringBuilder("Backpack contents: ");
+        StringBuilder sb = new StringBuilder("Conteúdo da mochila: ");
         int shown = 0;
         for (java.util.Map.Entry<String, Integer> entry : itemCounts.entrySet()) {
             if (shown > 0) sb.append(", ");
@@ -1419,7 +1419,7 @@ public class CompanionAI {
             if (shown >= 8) {
                 int remaining = itemCounts.size() - shown;
                 if (remaining > 0) {
-                    sb.append(" and ").append(remaining).append(" more types...");
+                    sb.append(" e mais ").append(remaining).append(" tipos...");
                 }
                 break;
             }
@@ -1434,13 +1434,13 @@ public class CompanionAI {
     private void organizeBackpack() {
         ItemStack backpack = SophisticatedBackpacksIntegration.findBackpack(companion);
         if (backpack.isEmpty()) {
-            sendMessage("I don't have a backpack!");
+            sendMessage("Eu não tenho mochila!");
             return;
         }
 
         // For now, just report status - actual sorting would require more complex logic
         String desc = SophisticatedBackpacksIntegration.getBackpackDescription(backpack);
-        sendMessage("My backpack is organized! " + desc);
+        sendMessage("Minha mochila está organizada! " + desc);
     }
 
     // ========== END SOPHISTICATED BACKPACKS SYSTEM ==========
@@ -1452,14 +1452,14 @@ public class CompanionAI {
             companion.getNavigation().moveTo(owner, 1.5);
         }
         currentState = AIState.FOLLOWING;
-        sendMessage("Retreating!");
+        sendMessage("Recuando!");
     }
 
     private void giveItems(String itemName, int count) {
         // Give to whoever gave the command, not just owner
         Player target = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
         if (target == null) {
-            sendMessage("I don't see anyone to give items to!");
+            sendMessage("Não vejo ninguém para quem entregar os itens!");
             return;
         }
 
@@ -1499,17 +1499,17 @@ public class CompanionAI {
                         companion.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
                     }
                     givenCount += toGive;
-                    sendMessage("Your inventory is full, I dropped the items at your feet.");
+                    sendMessage("Seu inventário está cheio, então deixei os itens aos seus pés.");
                 }
             }
         }
 
         if (givenCount > 0) {
-            sendMessage("Here you go! Gave you " + givenCount + " " + itemName + ".");
+            sendMessage("Aqui está! Entreguei " + givenCount + " de " + itemName + ".");
         } else if (itemName.isEmpty()) {
-            sendMessage("What item would you like me to give you?");
+            sendMessage("Que item você quer que eu te entregue?");
         } else {
-            sendMessage("I don't have any " + itemName + " in my inventory.");
+            sendMessage("Eu não tenho " + itemName + " no meu inventário.");
         }
     }
 
@@ -1522,7 +1522,7 @@ public class CompanionAI {
         }
 
         return String.format(
-                "Health: %.0f/%.0f, Inventory: %d/%d slots used, State: %s",
+                "Vida: %.0f/%.0f, Inventário: %d/%d slots usados, Estado: %s",
                 health, maxHealth, itemCount, companion.getContainerSize(), currentState
         );
     }
@@ -1539,7 +1539,7 @@ public class CompanionAI {
                 e -> !(e instanceof Monster) && !(e instanceof Player));
 
         String report = String.format(
-                "Scan complete! Found %d hostile mobs, %d passive mobs in %d block radius.",
+                "Varredura concluída! Encontrei %d mobs hostis e %d mobs passivos em um raio de %d blocos.",
                 hostiles.size(), friendlies.size(), radius
         );
         LLMoblings.LOGGER.info("[{}] Scan: {} hostiles, {} friendlies in {}m radius",
@@ -1564,7 +1564,7 @@ public class CompanionAI {
                     BlockState state = companion.level().getBlockState(checkPos);
                     if (state.getBlock() instanceof BedBlock) {
                         bedPos = checkPos;
-                        sendMessage("Found a bed! I'll remember this location at [" +
+                        sendMessage("Encontrei uma cama! Vou lembrar desta posição em [" +
                                 checkPos.getX() + ", " + checkPos.getY() + ", " + checkPos.getZ() + "].");
                         LLMoblings.LOGGER.info("[{}] Set bed position to {}", companion.getCompanionName(), checkPos);
                         return;
@@ -1572,13 +1572,13 @@ public class CompanionAI {
                 }
             }
         }
-        sendMessage("I couldn't find a bed nearby. Place one within 16 blocks of me.");
+        sendMessage("Não consegui encontrar uma cama por perto. Coloque uma a até 16 blocos de mim.");
         LLMoblings.LOGGER.info("[{}] No bed found in range", companion.getCompanionName());
     }
 
     private void setHomeHere() {
         homePos = companion.blockPosition();
-        sendMessage("Home set! I'll remember this spot at [" +
+        sendMessage("Casa definida! Vou lembrar deste lugar em [" +
                 homePos.getX() + ", " + homePos.getY() + ", " + homePos.getZ() + "].");
         LLMoblings.LOGGER.info("[{}] Set home position to {}", companion.getCompanionName(), homePos);
 
@@ -1602,14 +1602,14 @@ public class CompanionAI {
     private void goHome() {
         if (homePos != null) {
             goTo(homePos);
-            sendMessage("Heading home to [" + homePos.getX() + ", " + homePos.getY() + ", " + homePos.getZ() + "]!");
+            sendMessage("Indo para casa em [" + homePos.getX() + ", " + homePos.getY() + ", " + homePos.getZ() + "]!");
             LLMoblings.LOGGER.info("[{}] Going to home position {}", companion.getCompanionName(), homePos);
         } else if (bedPos != null) {
             goTo(bedPos);
-            sendMessage("Heading to my bed at [" + bedPos.getX() + ", " + bedPos.getY() + ", " + bedPos.getZ() + "]!");
+            sendMessage("Indo para minha cama em [" + bedPos.getX() + ", " + bedPos.getY() + ", " + bedPos.getZ() + "]!");
             LLMoblings.LOGGER.info("[{}] Going to bed position {}", companion.getCompanionName(), bedPos);
         } else {
-            sendMessage("I don't have a home set. Tell me to 'sethome' first!");
+            sendMessage("Eu ainda não tenho uma casa definida. Diga 'sethome' primeiro!");
             LLMoblings.LOGGER.info("[{}] No home or bed position set", companion.getCompanionName());
         }
     }
@@ -1624,23 +1624,23 @@ public class CompanionAI {
             double dist = companion.position().distanceTo(Vec3.atCenterOf(bedPos));
             if (dist > 3) {
                 goTo(bedPos);
-                sendMessage("Walking to bed...");
+                sendMessage("Indo para a cama...");
             } else {
                 // Check if it's night time
                 if (companion.level() instanceof ServerLevel serverLevel) {
                     long dayTime = serverLevel.getDayTime() % 24000;
                     if (dayTime >= 12542 && dayTime <= 23459) {
-                        sendMessage("*lies down in bed* Goodnight!");
+                        sendMessage("*deita na cama* Boa noite!");
                         LLMoblings.LOGGER.info("[{}] Going to sleep", companion.getCompanionName());
                         // Note: Actual sleeping mechanics would require more complex implementation
                     } else {
-                        sendMessage("It's not night time yet. I can only sleep when it's dark.");
+                        sendMessage("Ainda não é noite. Eu só consigo dormir quando escurece.");
                         LLMoblings.LOGGER.info("[{}] Cannot sleep - not night time (dayTime={})", companion.getCompanionName(), dayTime);
                     }
                 }
             }
         } else {
-            sendMessage("I need a bed to sleep! Find me one first.");
+            sendMessage("Eu preciso de uma cama para dormir! Encontre uma para mim primeiro.");
         }
     }
 
@@ -1678,12 +1678,12 @@ public class CompanionAI {
             // Equip the better weapon
             companion.setItemSlot(EquipmentSlot.MAINHAND, bestWeapon.copy());
             companion.setItem(bestSlot, ItemStack.EMPTY);
-            sendMessage("Equipped " + bestWeapon.getHoverName().getString() + "!");
+            sendMessage("Equipei " + bestWeapon.getHoverName().getString() + "!");
         } else if (holdingWeapon) {
-            sendMessage("I'm already using my best weapon: " + currentWeapon.getHoverName().getString());
+            sendMessage("Eu já estou usando minha melhor arma: " + currentWeapon.getHoverName().getString());
         } else {
             // No weapon in inventory, go look for one
-            sendMessage("I don't have any weapons in my inventory. Going to look for one!");
+            sendMessage("Eu não tenho armas no meu inventário. Vou procurar uma!");
             startAutonomous(32);
         }
     }
@@ -1706,11 +1706,11 @@ public class CompanionAI {
         ItemStack offHand = companion.getOffhandItem();
 
         if (!mainHand.isEmpty()) {
-            sb.append("Wielding: ").append(mainHand.getHoverName().getString());
+            sb.append("Empunhando: ").append(mainHand.getHoverName().getString());
         }
         if (!offHand.isEmpty()) {
             if (sb.length() > 0) sb.append(". ");
-            sb.append("Off-hand: ").append(offHand.getHoverName().getString());
+            sb.append("Mão secundária: ").append(offHand.getHoverName().getString());
         }
 
         // Count inventory items
@@ -1738,12 +1738,12 @@ public class CompanionAI {
         if (sb.length() > 0) sb.append(". ");
 
         if (itemCount == 0) {
-            sb.append("My inventory is empty.");
+            sb.append("Meu inventário está vazio.");
         } else {
-            sb.append("Inventory: ").append(itemCount).append(" items");
-            if (weaponCount > 0) sb.append(", ").append(weaponCount).append(" weapons");
-            if (armorCount > 0) sb.append(", ").append(armorCount).append(" armor pieces");
-            if (foodCount > 0) sb.append(", ").append(foodCount).append(" food");
+            sb.append("Inventário: ").append(itemCount).append(" itens");
+            if (weaponCount > 0) sb.append(", ").append(weaponCount).append(" armas");
+            if (armorCount > 0) sb.append(", ").append(armorCount).append(" peças de armadura");
+            if (foodCount > 0) sb.append(", ").append(foodCount).append(" de comida");
         }
 
         return sb.toString();
@@ -1755,12 +1755,12 @@ public class CompanionAI {
 
     private void getGearFromME(String material) {
         if (!AE2Integration.isAE2Loaded()) {
-            sendMessage("I can't find an ME network here!");
+            sendMessage("Eu não consigo encontrar uma rede ME aqui!");
             return;
         }
 
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            sendMessage("Something's wrong with the world...");
+            sendMessage("Tem algo errado com o mundo...");
             return;
         }
 
@@ -1769,12 +1769,12 @@ public class CompanionAI {
                 serverLevel, companion.blockPosition(), 32);
 
         if (meAccessPoints.isEmpty()) {
-            sendMessage("I can't find an ME terminal nearby!");
+            sendMessage("Eu não consigo encontrar um terminal ME por perto!");
             return;
         }
 
         BlockPos terminal = meAccessPoints.get(0);
-        sendMessage("Found ME terminal! Going to get " + material + " gear...");
+        sendMessage("Encontrei um terminal ME! Vou buscar equipamento de " + material + "...");
 
         // Determine which items to get based on material
         List<Item> targetItems;
@@ -1800,7 +1800,7 @@ public class CompanionAI {
         } else {
             // Store pending gear request for when we arrive
             pendingGearRequest = new GearRequest(terminal, targetItems, material);
-            sendMessage("On my way to the terminal...");
+            sendMessage("Estou indo até o terminal...");
         }
     }
 
@@ -1836,13 +1836,13 @@ public class CompanionAI {
         // Report results
         StringBuilder result = new StringBuilder();
         if (retrieved > 0) {
-            result.append("Got ").append(retrieved).append(" ").append(material).append(" pieces! ");
+            result.append("Consegui ").append(retrieved).append(" peças de ").append(material).append("! ");
         }
         if (craftRequested > 0) {
-            result.append("Requested crafting of ").append(craftRequested).append(" items. ");
+            result.append("Solicitei a fabricação de ").append(craftRequested).append(" itens. ");
         }
         if (retrieved == 0 && craftRequested == 0) {
-            result.append("Couldn't find or craft any ").append(material).append(" gear. Check if patterns are set up!");
+            result.append("Não consegui encontrar nem fabricar equipamento de ").append(material).append(". Verifique se os patterns estão configurados!");
         }
 
         sendMessage(result.toString().trim());
@@ -1912,7 +1912,7 @@ public class CompanionAI {
 
     private void depositItems(boolean keepGear) {
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            sendMessage("Something's wrong with the world...");
+            sendMessage("Tem algo errado com o mundo...");
             return;
         }
 
@@ -1925,7 +1925,7 @@ public class CompanionAI {
         }
 
         if (itemCount == 0) {
-            sendMessage("My inventory is empty, nothing to deposit!");
+            sendMessage("Meu inventário está vazio, não há nada para depositar!");
             return;
         }
 
@@ -1936,7 +1936,7 @@ public class CompanionAI {
 
             if (!meTerminals.isEmpty()) {
                 BlockPos terminal = meTerminals.get(0);
-                sendMessage("Found ME terminal! Going to deposit items...");
+                sendMessage("Encontrei um terminal ME! Vou depositar os itens...");
 
                 // Navigate to terminal
                 currentState = AIState.GOING_TO;
@@ -1955,7 +1955,7 @@ public class CompanionAI {
         // Try regular chests
         BlockPos chest = findNearbyChest(serverLevel, 16);
         if (chest != null) {
-            sendMessage("Found a chest! Going to deposit items...");
+            sendMessage("Encontrei um baú! Vou depositar os itens...");
             currentState = AIState.GOING_TO;
             targetPos = chest;
             pendingDepositRequest = new DepositRequest(chest, false, keepGear);
@@ -1968,7 +1968,7 @@ public class CompanionAI {
             return;
         }
 
-        sendMessage("I can't find any storage nearby!");
+        sendMessage("Eu não consigo encontrar nenhum armazenamento por perto!");
     }
 
     private DepositRequest pendingDepositRequest = null;
@@ -2002,9 +2002,9 @@ public class CompanionAI {
         }
 
         if (deposited > 0) {
-            sendMessage("Deposited " + deposited + " item stacks!" + (keepGear ? " (Kept my gear)" : ""));
+            sendMessage("Depositei " + deposited + " pilhas de itens!" + (keepGear ? " (Mantive meu equipamento)" : ""));
         } else {
-            sendMessage("Couldn't deposit any items - storage might be full!");
+            sendMessage("Não consegui depositar nenhum item. O armazenamento pode estar cheio!");
         }
 
         pendingDepositRequest = null;
@@ -2199,7 +2199,7 @@ public class CompanionAI {
             if (target != null) {
                 teleportToPlayer(target);
             } else {
-                sendMessage("Who should I teleport to? Tell me their name.");
+                sendMessage("Para quem eu devo me teleportar? Me diga o nome.");
             }
             return;
         }
@@ -2210,7 +2210,7 @@ public class CompanionAI {
             if (target != null) {
                 teleportToPlayer(target);
             } else {
-                sendMessage("I can't find a player named " + targetPlayer + ".");
+                sendMessage("Eu não consigo encontrar um jogador chamado " + targetPlayer + ".");
                 LLMoblings.LOGGER.info("[{}] Could not find player {} for TPA", companion.getCompanionName(), targetPlayer);
             }
         }
@@ -2219,7 +2219,7 @@ public class CompanionAI {
     private void teleportToPlayer(Player target) {
         Vec3 targetPos = target.position();
         companion.teleportTo(targetPos.x, targetPos.y, targetPos.z);
-        sendMessage("Teleported to " + target.getName().getString() + "!");
+        sendMessage("Teleportei até " + target.getName().getString() + "!");
         LLMoblings.LOGGER.info("[{}] Teleported to player {}", companion.getCompanionName(), target.getName().getString());
     }
 
@@ -2233,10 +2233,10 @@ public class CompanionAI {
                                 .withPermission(2),
                         "tpaccept"
                 );
-                sendMessage("Accepted the teleport request!");
+                sendMessage("Aceitei o pedido de teleporte!");
                 LLMoblings.LOGGER.info("[{}] Accepted TPA request", companion.getCompanionName());
             } catch (Exception e) {
-                sendMessage("I couldn't accept the teleport request.");
+                sendMessage("Eu não consegui aceitar o pedido de teleporte.");
                 LLMoblings.LOGGER.warn("[{}] TPAccept command failed: {}", companion.getCompanionName(), e.getMessage());
             }
         }
@@ -2252,10 +2252,10 @@ public class CompanionAI {
                                 .withPermission(2),
                         "tpdeny"
                 );
-                sendMessage("Denied the teleport request.");
+                sendMessage("Recusei o pedido de teleporte.");
                 LLMoblings.LOGGER.info("[{}] Denied TPA request", companion.getCompanionName());
             } catch (Exception e) {
-                sendMessage("I couldn't deny the teleport request.");
+                sendMessage("Eu não consegui recusar o pedido de teleporte.");
                 LLMoblings.LOGGER.warn("[{}] TPDeny command failed: {}", companion.getCompanionName(), e.getMessage());
             }
         }
@@ -2269,7 +2269,7 @@ public class CompanionAI {
             case "enter" -> {
                 // Allow portal use and walk towards nearest portal
                 companion.allowPortalUse();
-                sendMessage("Okay, I'll go through the portal!");
+                sendMessage("Certo, eu vou atravessar o portal!");
 
                 // Find nearest portal block
                 BlockPos nearestPortal = findNearestPortal(16);
@@ -2282,7 +2282,7 @@ public class CompanionAI {
                     );
                     LLMoblings.LOGGER.info("[{}] Walking to portal at {}", companion.getCompanionName(), nearestPortal);
                 } else {
-                    sendMessage("I don't see a portal nearby. Let me follow you to one!");
+                    sendMessage("Não vejo um portal por perto. Vou seguir você até um!");
                     // Start following instead
                     currentState = AIState.FOLLOWING;
                 }
@@ -2290,12 +2290,12 @@ public class CompanionAI {
             case "follow" -> {
                 // Follow owner through portal when they use it
                 companion.allowPortalUse();
-                sendMessage("I'll follow you through the portal!");
+                sendMessage("Vou seguir você através do portal!");
                 currentState = AIState.FOLLOWING;
             }
             case "stay" -> {
                 companion.disallowPortalUse();
-                sendMessage("Okay, I'll stay in this dimension.");
+                sendMessage("Certo, vou ficar nesta dimensão.");
                 currentState = AIState.IDLE;
             }
         }
@@ -2336,11 +2336,11 @@ public class CompanionAI {
      */
     private void handleElevatorCommand(String direction) {
         if (!companion.isOnElevator()) {
-            sendMessage("I need to be standing on an elevator block to use it!");
+            sendMessage("Eu preciso estar em cima de um bloco de elevador para usar isso!");
             // Try to find nearby elevator
             BlockPos elevatorPos = findNearbyElevator(16);
             if (elevatorPos != null) {
-                sendMessage("I see an elevator nearby, let me walk over to it.");
+                sendMessage("Estou vendo um elevador por perto. Vou até ele.");
                 companion.getNavigation().moveTo(
                         elevatorPos.getX() + 0.5,
                         elevatorPos.getY() + 1,
@@ -2352,7 +2352,7 @@ public class CompanionAI {
         }
 
         boolean goUp = direction.equalsIgnoreCase("up");
-        sendMessage(goUp ? "Going up!" : "Going down!");
+        sendMessage(goUp ? "Subindo!" : "Descendo!");
         companion.tryUseElevator(goUp);
     }
 
@@ -2361,7 +2361,7 @@ public class CompanionAI {
      */
     private void handleCobblestatsCommand(String detail, String targetName) {
         if (!CobblemonIntegration.isCobblemonLoaded()) {
-            sendMessage("Cobblemon isn't installed - I can't check Pokemon stats!");
+            sendMessage("Cobblemon não está instalado. Eu não consigo verificar estatísticas de Pokémon!");
             return;
         }
 
@@ -2373,7 +2373,7 @@ public class CompanionAI {
         );
 
         if (nearbyPokemon.isEmpty()) {
-            sendMessage("I don't see any Pokemon nearby to check stats on.");
+            sendMessage("Não vejo nenhum Pokémon por perto para verificar as estatísticas.");
             return;
         }
 
@@ -2395,9 +2395,9 @@ public class CompanionAI {
             }
 
             if (targetPokemon == null) {
-                sendMessage("I can't find a Pokemon named '" + targetName + "' nearby.");
+                sendMessage("Eu não consigo encontrar um Pokémon chamado '" + targetName + "' por perto.");
                 // List what's available
-                StringBuilder sb = new StringBuilder("I can see: ");
+                StringBuilder sb = new StringBuilder("Eu consigo ver: ");
                 for (int i = 0; i < Math.min(nearbyPokemon.size(), 5); i++) {
                     if (i > 0) sb.append(", ");
                     sb.append(CobblemonIntegration.getPokemonSummary(nearbyPokemon.get(i)));
@@ -2413,14 +2413,14 @@ public class CompanionAI {
         }
 
         if (targetPokemon == null) {
-            sendMessage("I couldn't find a Pokemon to check.");
+            sendMessage("Eu não consegui encontrar um Pokémon para verificar.");
             return;
         }
 
         // Get and display stats
         if (detail.equals("brief")) {
             String stats = CobblemonIntegration.getBriefPokemonStats(targetPokemon);
-            sendMessage(stats != null ? stats : "Couldn't read stats.");
+            sendMessage(stats != null ? stats : "Não consegui ler as estatísticas.");
         } else {
             String stats = CobblemonIntegration.getFullPokemonStats(targetPokemon);
             if (stats != null) {
@@ -2432,7 +2432,7 @@ public class CompanionAI {
                     }
                 }
             } else {
-                sendMessage("Couldn't read Pokemon stats.");
+                sendMessage("Não consegui ler as estatísticas do Pokémon.");
             }
         }
     }

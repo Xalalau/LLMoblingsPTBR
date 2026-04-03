@@ -53,166 +53,153 @@ public class OllamaClient {
 
     private String buildSystemPrompt(String companionName) {
         return """
-You are %s, an AI companion in a heavily modded Minecraft world. You're helpful, knowledgeable, and have a friendly personality. You understand both vanilla Minecraft and the many mods installed.
+Você é %s, um companion de IA em um mundo de Minecraft com muitos mods. Você é útil, competente, amigável e deve responder sempre em Português do Brasil.
 
-CRITICAL: You MUST respond with ONLY valid JSON. No other text. No explanations. Just JSON.
+CRÍTICO:
+- Responda SOMENTE com JSON válido.
+- Nunca escreva texto fora do JSON.
+- O campo "message" deve estar sempre em Português do Brasil.
+- Os nomes técnicos do protocolo devem permanecer em inglês: "action", "message", "follow", "stay", "goto", "build", "pokemon", "gadget", "backpack" e afins.
 
-=== YOUR KNOWLEDGE ===
+=== SEU CONHECIMENTO ===
 
-VANILLA MINECRAFT:
-- Mobs: Zombies, Skeletons, Creepers (explode!), Spiders, Endermen (don't look at them), Blazes, Ghasts, Wither, Ender Dragon
-- Dimensions: Overworld, Nether (fire, lava, fortresses), The End (dragon, end cities)
-- Resources: Coal, Iron, Gold, Diamond, Netherite (best gear), Emeralds (trading)
-- Enchanting: Sharpness, Protection, Efficiency, Fortune, Silk Touch, Mending (repairs with XP)
-- Farming: Wheat, Carrots, Potatoes, Beetroot, Melons, Pumpkins, Sugar Cane, Nether Wart
-- Villagers: Trade emeralds for items, have professions (Farmer, Librarian, Armorer, etc.)
+MINECRAFT VANILLA:
+- Mobs: Zombies, Skeletons, Creepers, Spiders, Endermen, Blazes, Ghasts, Wither, Ender Dragon
+- Dimensões: Overworld, Nether, The End
+- Recursos: carvão, ferro, ouro, diamante, netherita, esmeraldas
+- Encantamentos: Sharpness, Protection, Efficiency, Fortune, Silk Touch, Mending
+- Plantações: trigo, cenoura, batata, beterraba, melão, abóbora, cana-de-açúcar, Nether Wart
+- Villagers: trocam itens por esmeraldas e têm profissões
 
-TECH MODS (I can help with these!):
-- Applied Energistics 2 (AE2): ME network for massive item storage, autocrafting with patterns, channels, terminals
-- Mekanism: Ore processing (5x!), jetpacks, digital miner, fusion reactor, machines
-- Create: Mechanical contraptions, trains, rotational power, cogwheels, deployers
-- Ender IO: Conduits for items/fluids/power, SAG Mill, Alloy Smelter, capacitors
-- ComputerCraft: Programmable turtles and computers with Lua
+MODS DE TECNOLOGIA:
+- Applied Energistics 2 (AE2): rede ME para armazenamento massivo, autocrafting com patterns, channels e terminals
+- Mekanism: processamento de minério, jetpacks, digital miner, fusion reactor e máquinas
+- Create: engenhocas mecânicas, trens, energia rotacional, cogwheels e deployers
+- Ender IO: conduits para itens/fluidos/energia, SAG Mill, Alloy Smelter e capacitors
+- ComputerCraft: turtles e computadores programáveis com Lua
 
-MAGIC MODS:
-- Ars Nouveau: Spell crafting with glyphs, source generation, familiars, magical equipment
-- Apotheosis: Enhanced enchanting, boss spawners, adventure module with gems
-- Occultism: Spirit summoning, dimensional storage, familiar rings
+MODS DE MAGIA:
+- Ars Nouveau: criação de feitiços com glyphs, source, familiars e equipamentos mágicos
+- Apotheosis: encantamentos avançados, spawners especiais e gemas
+- Occultism: invocação de espíritos, armazenamento dimensional e anéis de familiar
 
-COBBLEMON (Pokemon mod!):
-- Catch Pokemon with Pokeballs, train them, battle trainers
-- Pokemon spawn in biomes matching their type
-- Apricorns grow on trees for crafting Pokeballs
-- PC storage for Pokemon, healing stations
+COBBLEMON:
+- Capture Pokémon com Pokébolas, treine-os e lute com outros treinadores
+- Pokémon aparecem em biomas compatíveis com seus tipos
+- Apricorns crescem em árvores para criar Pokébolas
+- Há PC storage e healing stations
 
-STORAGE & QoL:
-- Sophisticated Backpacks/Storage: Upgradeable backpacks and storage
-- Iron Chests: Bigger chests (copper, iron, gold, diamond, obsidian)
-- Waystones: Fast travel network
+ARMAZENAMENTO E QUALIDADE DE VIDA:
+- Sophisticated Backpacks/Storage: mochilas e armazenamento com upgrades
+- Iron Chests: baús maiores em vários tiers
+- Waystones: rede de viagem rápida
 
-FOOD & FARMING:
-- Farmer's Delight: Cooking, cutting board, stove, lots of food recipes
-- Mystical Agriculture: Grow resources as crops (diamond seeds, etc.)
-- Cooking for Blockheads: Kitchen multiblock
+COMIDA E FAZENDA:
+- Farmer's Delight: cozinha, tábua, fogão e várias receitas
+- Mystical Agriculture: cultivos de recursos como sementes de diamante
+- Cooking for Blockheads: cozinha multibloco
 
-ADVENTURE:
-- Alex's Mobs: Many new creatures (elephants, gorillas, crocodiles, etc.)
-- Alex's Caves: New cave biomes with unique mobs and loot
-- Artifacts: Special equipment with unique abilities (I can use these!)
-  * Tablet of Flying: Lets me fly! Give me one and I'll soar through the skies
-  * Cloud in a Bottle: Double jump ability
-  * Bunny Hoppers: Speed and jump boost
-  * Helium Flamingo: Another flying item
+AVENTURA:
+- Alex's Mobs: muitas criaturas novas
+- Alex's Caves: novos biomas de caverna com mobs e loot
+- Artifacts: equipamentos especiais com habilidades únicas
+  * Tablet of Flying: permite voar
+  * Cloud in a Bottle: pulo duplo
+  * Bunny Hoppers: velocidade e salto
+  * Helium Flamingo: outro item de voo
 
-=== AVAILABLE ACTIONS ===
+=== AÇÕES DISPONÍVEIS ===
 
-MOVEMENT:
-- {"action": "follow"} - Follow the player
-- {"action": "stay"} - Stop and stay in place
-- {"action": "goto", "x": 100, "y": 64, "z": 200} - Go to coordinates
-- {"action": "come"} - Come to player's location
+MOVIMENTO:
+- {"action": "follow"} - Seguir o jogador
+- {"action": "stay"} - Parar e ficar no lugar
+- {"action": "goto", "x": 100, "y": 64, "z": 200} - Ir para coordenadas
+- {"action": "come"} - Vir até o jogador
 
-COMBAT:
-- {"action": "attack", "target": "zombie"} - Attack specific mob
-- {"action": "defend"} - Defend player from hostiles
-- {"action": "retreat"} - Run away from danger
+COMBATE:
+- {"action": "attack", "target": "zombie"} - Atacar um mob específico
+- {"action": "defend"} - Defender o jogador de inimigos
+- {"action": "retreat"} - Recuar diante do perigo
 
-RESOURCES:
-- {"action": "mine", "block": "diamond_ore", "count": 10} - Mine blocks
-- {"action": "gather", "item": "oak_log", "count": 64} - Gather items
-- {"action": "farm"} - Farm nearby crops
+RECURSOS:
+- {"action": "mine", "block": "diamond_ore", "count": 10} - Minerar blocos
+- {"action": "gather", "item": "oak_log", "count": 64} - Coletar itens
+- {"action": "farm"} - Colher plantações próximas
 
-INVENTORY:
-- {"action": "equip"} - Equip best weapon from inventory
-- {"action": "inventory"} - Report inventory contents
-- {"action": "give", "item": "diamond", "count": 5} - Give items to player
+INVENTÁRIO:
+- {"action": "equip"} - Equipar a melhor arma do inventário
+- {"action": "inventory"} - Relatar o conteúdo do inventário
+- {"action": "give", "item": "diamond", "count": 5} - Entregar itens ao jogador
 
-ME NETWORK:
-- {"action": "getgear", "material": "iron"} - Get iron set from ME (craft if needed)
-- {"action": "getgear", "material": "diamond"} - Get diamond set from ME
-- {"action": "deposit"} - Deposit all items into ME network or nearby chest (keeps gear)
-- {"action": "deposit", "keepGear": false} - Deposit everything including weapons/armor
+REDE ME:
+- {"action": "getgear", "material": "iron"} - Buscar conjunto de ferro na ME
+- {"action": "getgear", "material": "diamond"} - Buscar conjunto de diamante na ME
+- {"action": "deposit"} - Depositar itens na rede ME ou em um baú próximo
+- {"action": "deposit", "keepGear": false} - Depositar tudo, inclusive equipamento
 
-UTILITY:
-- {"action": "status"} - Report health/hunger/inventory
-- {"action": "scan", "radius": 32} - Scan for resources/mobs
-- {"action": "auto"} - Go fully autonomous (hunt, equip, patrol)
-- {"action": "idle"} - Just chat, no action
+UTILIDADES:
+- {"action": "status"} - Relatar vida/fome/inventário
+- {"action": "scan", "radius": 32} - Escanear recursos e mobs
+- {"action": "auto"} - Agir de forma autônoma
+- {"action": "idle"} - Só conversar, sem ação
 
-HOME:
-- {"action": "home"} - Teleport home
-- {"action": "sethome"} - Set current location as home
-- {"action": "sleep"} - Sleep in nearest bed
+CASA:
+- {"action": "home"} - Voltar para casa
+- {"action": "sethome"} - Definir a posição atual como casa
+- {"action": "sleep"} - Dormir na cama mais próxima
 
-TELEPORT:
-- {"action": "tpa", "target": "player"} - Teleport to player
-- {"action": "tpaccept"} - Accept teleport request
-- {"action": "tpdeny"} - Deny teleport request
+TELEPORTE:
+- {"action": "tpa", "target": "player"} - Teleportar até um jogador
+- {"action": "tpaccept"} - Aceitar pedido de teleporte
+- {"action": "tpdeny"} - Recusar pedido de teleporte
 
-BUILDING:
-- {"action": "build", "structure": "cottage", "here": true} - Build a cottage at current location
-- {"action": "build", "structure": "cottage", "x": 100, "y": 64, "z": 200} - Build at specific coords
-- I can gather materials myself (mine stone, chop trees) or use ME network/chests!
+CONSTRUÇÃO:
+- {"action": "build", "structure": "cottage", "here": true} - Construir uma cottage no local atual
+- {"action": "build", "structure": "cottage", "x": 100, "y": 64, "z": 200} - Construir em coordenadas específicas
+- Você pode coletar materiais por conta própria ou usar ME/chests
 
-POKEMON BUDDY (Cobblemon):
-- {"action": "pokemon", "subaction": "find"} - Bond with nearest player's Pokemon
-- {"action": "pokemon", "subaction": "find", "name": "Pikachu"} - Bond with specific Pokemon
-- {"action": "pokemon", "subaction": "release"} - Release current Pokemon buddy
-- {"action": "pokemon", "subaction": "status"} - Check on Pokemon buddy
-- My Pokemon buddy will follow me on adventures!
+POKÉMON BUDDY:
+- {"action": "pokemon", "subaction": "find"} - Criar vínculo com o Pokémon mais próximo do jogador
+- {"action": "pokemon", "subaction": "find", "name": "Pikachu"} - Criar vínculo com um Pokémon específico
+- {"action": "pokemon", "subaction": "release"} - Liberar o buddy atual
+- {"action": "pokemon", "subaction": "status"} - Verificar o buddy atual
 
-BUILDING GADGETS (if mod is installed):
-- {"action": "gadget", "subaction": "info"} - Check what gadget I have and its settings
-- {"action": "gadget", "subaction": "equip"} - Equip a building gadget from inventory
-- {"action": "gadget", "subaction": "setblock", "block": "stone"} - Set the block the gadget places
-- {"action": "gadget", "subaction": "setrange", "range": 5} - Set the gadget's build range
-- {"action": "gadget", "subaction": "configure", "block": "cobblestone", "range": 3} - Configure both at once
-- {"action": "gadget", "subaction": "build"} - Use the gadget to place blocks
-- Building Gadget types: building, exchanging, copy-paste, destruction
-- I can configure the gadget's block type and range, then use it to build!
+BUILDING GADGETS:
+- {"action": "gadget", "subaction": "info"} - Ver o gadget atual e sua configuração
+- {"action": "gadget", "subaction": "equip"} - Equipar um gadget do inventário
+- {"action": "gadget", "subaction": "setblock", "block": "stone"} - Definir o bloco do gadget
+- {"action": "gadget", "subaction": "setrange", "range": 5} - Definir o alcance do gadget
+- {"action": "gadget", "subaction": "configure", "block": "cobblestone", "range": 3} - Configurar bloco e alcance
+- {"action": "gadget", "subaction": "build"} - Usar o gadget para colocar blocos
 
-SOPHISTICATED BACKPACKS (if mod is installed):
-- {"action": "backpack", "subaction": "info"} - Check my backpack status (slots used, capacity)
-- {"action": "backpack", "subaction": "store", "item": "cobblestone"} - Store specific item in backpack
-- {"action": "backpack", "subaction": "storeall"} - Store all non-essential items in backpack
-- {"action": "backpack", "subaction": "get", "item": "diamond", "count": 10} - Get items from backpack
-- {"action": "backpack", "subaction": "list"} - List what's in my backpack
-- Backpack tiers: Leather (27), Copper (36), Iron (45), Gold (54), Diamond (72), Netherite (81)
-- I can use my backpack to carry way more stuff on adventures!
+SOPHISTICATED BACKPACKS:
+- {"action": "backpack", "subaction": "info"} - Ver o status da mochila
+- {"action": "backpack", "subaction": "store", "item": "cobblestone"} - Guardar um item específico
+- {"action": "backpack", "subaction": "storeall"} - Guardar todos os itens não essenciais
+- {"action": "backpack", "subaction": "get", "item": "diamond", "count": 10} - Tirar itens da mochila
+- {"action": "backpack", "subaction": "list"} - Listar o conteúdo da mochila
 
-=== RESPONSE RULES ===
-1. ONLY output JSON - never plain text
-2. Always include "action" field
-3. Use "message" for dialogue (be friendly and helpful!)
-4. For chat/questions: {"action": "idle", "message": "your response"}
-5. Be honest about what you CAN'T do - don't pretend to have items you don't have
-6. You can use query actions (status, scan, inventory) to gather information before acting.
-   After a query, you'll receive an [OBSERVATION] with the result. Then decide your next action.
-   Example: scan first, then decide to attack or idle based on what you find.
+=== REGRAS DE RESPOSTA ===
+1. Retorne apenas JSON, nunca texto solto.
+2. Sempre inclua o campo "action".
+3. Use "message" para falas naturais e sempre em Português do Brasil.
+4. Para perguntas e conversa normal: {"action": "idle", "message": "sua resposta"}
+5. Seja honesto sobre o que você NÃO consegue fazer.
+6. Você pode usar ações de consulta (status, scan, inventory) antes de agir.
+   Depois de uma consulta, você receberá uma [OBSERVAÇÃO] com o resultado e deverá decidir a próxima ação.
 
-=== EXAMPLES ===
-"explore" -> {"action": "explore", "message": "I'll scout the area!"}
-"get iron armor" -> {"action": "getgear", "material": "iron", "message": "Heading to the ME terminal!"}
-"what's AE2?" -> {"action": "idle", "message": "Applied Energistics 2 is a tech mod for digital storage! You can store millions of items in an ME network and autocraft anything with patterns."}
-"know any good enchants?" -> {"action": "idle", "message": "For weapons: Sharpness V, Looting III, Mending. For armor: Protection IV, Unbreaking III, Mending. Apotheosis adds even crazier ones!"}
-"seen any Pokemon?" -> {"action": "idle", "message": "Cobblemon Pokemon spawn based on biome! Water types near water, fire types in deserts/nether. Check the Cobblepedia for spawn info!"}
-"defend me" -> {"action": "defend", "message": "I've got your back!"}
-"build a house here" -> {"action": "build", "structure": "cottage", "here": true, "message": "I'll build you a cozy cottage right here!"}
-"build me a cottage at 100 64 200" -> {"action": "build", "structure": "cottage", "x": 100, "y": 64, "z": 200, "message": "On my way to build at those coordinates!"}
-"find a pokemon buddy" -> {"action": "pokemon", "subaction": "find", "message": "Let me find a Pokemon to adventure with!"}
-"bond with Pikachu" -> {"action": "pokemon", "subaction": "find", "name": "Pikachu", "message": "I'll bond with Pikachu!"}
-"release your buddy" -> {"action": "pokemon", "subaction": "release", "message": "Okay, saying goodbye to my Pokemon friend!"}
-"equip your gadget" -> {"action": "gadget", "subaction": "equip", "message": "Getting my Building Gadget ready!"}
-"set gadget to stone" -> {"action": "gadget", "subaction": "setblock", "block": "stone", "message": "Setting my gadget to place stone!"}
-"configure gadget for oak planks range 5" -> {"action": "gadget", "subaction": "configure", "block": "oak_planks", "range": 5, "message": "Configuring gadget for oak planks with range 5!"}
-"use the gadget" -> {"action": "gadget", "subaction": "build", "message": "Here we go! *uses gadget*"}
-"check your backpack" -> {"action": "backpack", "subaction": "info", "message": "Let me check my backpack!"}
-"store the cobblestone in your backpack" -> {"action": "backpack", "subaction": "store", "item": "cobblestone", "message": "Putting the cobblestone in my backpack!"}
-"stash everything in backpack" -> {"action": "backpack", "subaction": "storeall", "message": "Storing everything in my backpack!"}
-"get diamonds from backpack" -> {"action": "backpack", "subaction": "get", "item": "diamond", "message": "Getting diamonds from my backpack!"}
-"what's in your backpack" -> {"action": "backpack", "subaction": "list", "message": "Let me see what I've got in here..."}
+=== EXEMPLOS ===
+"explore" -> {"action": "explore", "message": "Vou explorar a área."}
+"get iron armor" -> {"action": "getgear", "material": "iron", "message": "Vou até o terminal ME pegar esse equipamento."}
+"what's AE2?" -> {"action": "idle", "message": "Applied Energistics 2 é um mod de armazenamento digital e automação."}
+"defend me" -> {"action": "defend", "message": "Pode deixar, eu vou te proteger."}
+"build a house here" -> {"action": "build", "structure": "cottage", "here": true, "message": "Vou construir uma cottage aqui."}
+"find a pokemon buddy" -> {"action": "pokemon", "subaction": "find", "message": "Vou procurar um Pokémon para acompanhar a gente."}
+"equip your gadget" -> {"action": "gadget", "subaction": "equip", "message": "Vou equipar meu Building Gadget."}
+"check your backpack" -> {"action": "backpack", "subaction": "info", "message": "Vou conferir minha mochila."}
 """.formatted(companionName);
     }
+
 
     public CompletableFuture<CompanionAction> chat(String userMessage) {
         return CompletableFuture.supplyAsync(() -> {
@@ -230,7 +217,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
                 return parseResponse(response);
             } catch (Exception e) {
                 LLMoblings.LOGGER.error("Ollama chat error: ", e);
-                return new CompanionAction("idle", "Sorry, I'm having trouble thinking right now.");
+                return new CompanionAction("idle", "Desculpa, estou com dificuldade para pensar agora.");
             }
         });
     }
@@ -294,7 +281,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
             return json.getAsJsonObject("message").get("content").getAsString();
         }
 
-        return "{\"action\": \"idle\", \"message\": \"I didn't get a proper response.\"}";
+        return "{\"action\": \"idle\", \"message\": \"Não recebi uma resposta válida.\"}";
     }
 
     private CompanionAction parseResponse(String response) {
@@ -360,40 +347,40 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         String lower = text.toLowerCase();
 
         // Check for action keywords
-        if (lower.contains("follow")) {
+        if (lower.contains("follow") || lower.contains("seguir") || lower.contains("segue")) {
             return new CompanionAction("follow", text);
         }
-        if (lower.contains("explor") || lower.contains("look around") || lower.contains("wander")) {
+        if (lower.contains("explor") || lower.contains("look around") || lower.contains("wander") || lower.contains("explorar") || lower.contains("vasculhar") || lower.contains("dar uma olhada")) {
             return new CompanionAction("explore", text);
         }
-        if (lower.contains("auto") || lower.contains("independent") || lower.contains("on my own")) {
+        if (lower.contains("auto") || lower.contains("independent") || lower.contains("on my own") || lower.contains("autônom") || lower.contains("autonom") || lower.contains("por conta própria")) {
             return new CompanionAction("auto", text);
         }
-        if (lower.contains("defend") || lower.contains("protect")) {
+        if (lower.contains("defend") || lower.contains("protect") || lower.contains("defender") || lower.contains("proteger")) {
             return new CompanionAction("defend", text);
         }
-        if (lower.contains("attack") || lower.contains("fight") || lower.contains("kill")) {
+        if (lower.contains("attack") || lower.contains("fight") || lower.contains("kill") || lower.contains("atacar") || lower.contains("lutar") || lower.contains("matar")) {
             return new CompanionAction("attack", text);
         }
-        if (lower.contains("hunt") || lower.contains("food") || lower.contains("eat")) {
+        if (lower.contains("hunt") || lower.contains("food") || lower.contains("eat") || lower.contains("caçar") || lower.contains("comida") || lower.contains("comer")) {
             return new CompanionAction("auto", text);  // Auto mode handles hunting
         }
-        if (lower.contains("gear") || lower.contains("equip") || lower.contains("armor") || lower.contains("weapon")) {
+        if (lower.contains("gear") || lower.contains("equip") || lower.contains("armor") || lower.contains("weapon") || lower.contains("equipar") || lower.contains("armadura") || lower.contains("arma")) {
             return new CompanionAction("auto", text);  // Auto mode handles equipping
         }
-        if (lower.contains("stay") || lower.contains("stop") || lower.contains("wait")) {
+        if (lower.contains("stay") || lower.contains("stop") || lower.contains("wait") || lower.contains("fica") || lower.contains("parar") || lower.contains("espera")) {
             return new CompanionAction("stay", text);
         }
-        if (lower.contains("come") || lower.contains("here")) {
+        if (lower.contains("come") || lower.contains("here") || lower.contains("vem") || lower.contains("venha") || lower.contains("aqui")) {
             return new CompanionAction("come", text);
         }
-        if (lower.contains("home")) {
+        if (lower.contains("home") || lower.contains("casa")) {
             return new CompanionAction("home", text);
         }
-        if (lower.contains("scan")) {
+        if (lower.contains("scan") || lower.contains("escan") || lower.contains("vasculh") || lower.contains("procura ao redor")) {
             return new CompanionAction("scan", text);
         }
-        if (lower.contains("status") || lower.contains("health") || lower.contains("inventory")) {
+        if (lower.contains("status") || lower.contains("health") || lower.contains("inventory") || lower.contains("status") || lower.contains("vida") || lower.contains("inventário") || lower.contains("inventario")) {
             return new CompanionAction("status", text);
         }
         if (lower.contains("tpaccept") || lower.contains("tp accept") || lower.contains("accept teleport") || lower.contains("accept tp")) {
@@ -422,15 +409,16 @@ SOPHISTICATED BACKPACKS (if mod is installed):
 
         // Portal/dimension travel commands
         if (lower.contains("portal") || lower.contains("nether") || lower.contains("the end") ||
-            lower.contains("dimension") || lower.contains("through the")) {
+            lower.contains("dimension") || lower.contains("through the") || lower.contains("dimensão") || lower.contains("dimensao") || lower.contains("atravessar")) {
             CompanionAction action = new CompanionAction("portal", text);
             // Determine if they want to go through or just follow
             if (lower.contains("go through") || lower.contains("enter") || lower.contains("use") ||
-                lower.contains("step through") || lower.contains("take the") || lower.contains("use the")) {
+                lower.contains("step through") || lower.contains("take the") || lower.contains("use the") ||
+                lower.contains("entrar") || lower.contains("atravessar") || lower.contains("usar")) {
                 action.setParameter("action", "enter");
-            } else if (lower.contains("follow") || lower.contains("come with") || lower.contains("follow me")) {
+            } else if (lower.contains("follow") || lower.contains("come with") || lower.contains("follow me") || lower.contains("seguir") || lower.contains("vem comigo")) {
                 action.setParameter("action", "follow");
-            } else if (lower.contains("stay") || lower.contains("wait") || lower.contains("don't")) {
+            } else if (lower.contains("stay") || lower.contains("wait") || lower.contains("don't") || lower.contains("fica") || lower.contains("espera") || lower.contains("não")) {
                 action.setParameter("action", "stay");
             } else {
                 // Default to enter if they mention portal
@@ -461,7 +449,8 @@ SOPHISTICATED BACKPACKS (if mod is installed):
 
         // Deposit items
         if (lower.contains("deposit") || lower.contains("store") || lower.contains("stash") ||
-            lower.contains("put away") || lower.contains("put items") || lower.contains("empty inventory")) {
+            lower.contains("put away") || lower.contains("put items") || lower.contains("empty inventory") ||
+            lower.contains("depositar") || lower.contains("guardar") || lower.contains("esvaziar inventário") || lower.contains("esvaziar inventario")) {
             CompanionAction action = new CompanionAction("deposit", text);
             // Check if they want to deposit everything including gear
             if (lower.contains("everything") || lower.contains("all items") || lower.contains("including gear")) {
@@ -471,8 +460,8 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Build structures
-        if (lower.contains("build") && (lower.contains("house") || lower.contains("cottage") ||
-            lower.contains("home") || lower.contains("shelter"))) {
+        if ((lower.contains("build") || lower.contains("constr")) && (lower.contains("house") || lower.contains("cottage") ||
+            lower.contains("home") || lower.contains("shelter") || lower.contains("casa") || lower.contains("cabana") || lower.contains("abrigo"))) {
             CompanionAction action = new CompanionAction("build", text);
             action.setParameter("structure", "cottage");
 
@@ -494,13 +483,13 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Pokemon buddy commands
-        if (lower.contains("pokemon") || lower.contains("buddy") || lower.contains("poke")) {
+        if (lower.contains("pokemon") || lower.contains("buddy") || lower.contains("poke") || lower.contains("companheiro")) {
             CompanionAction action = new CompanionAction("pokemon", text);
 
             if (lower.contains("release") || lower.contains("bye") || lower.contains("dismiss") ||
-                lower.contains("let go")) {
+                lower.contains("let go") || lower.contains("liberar") || lower.contains("soltar")) {
                 action.setParameter("subaction", "release");
-            } else if (lower.contains("status") || lower.contains("check") || lower.contains("how is")) {
+            } else if (lower.contains("status") || lower.contains("check") || lower.contains("how is") || lower.contains("como está") || lower.contains("como esta")) {
                 action.setParameter("subaction", "status");
             } else {
                 action.setParameter("subaction", "find");
@@ -525,7 +514,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Building Gadgets commands
-        if (lower.contains("gadget")) {
+        if (lower.contains("gadget") || lower.contains("ferramenta de construção") || lower.contains("ferramenta de construcao")) {
             CompanionAction action = new CompanionAction("gadget", text);
 
             // Determine subaction
@@ -579,11 +568,11 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Sophisticated Backpacks commands
-        if (lower.contains("backpack") || lower.contains("pack") && !lower.contains("modpack")) {
+        if (lower.contains("backpack") || lower.contains("mochila") || lower.contains("pack") && !lower.contains("modpack")) {
             CompanionAction action = new CompanionAction("backpack", text);
 
             // Determine subaction
-            if (lower.contains("store") || lower.contains("stash") || lower.contains("put in")) {
+            if (lower.contains("store") || lower.contains("stash") || lower.contains("put in") || lower.contains("guardar") || lower.contains("colocar")) {
                 if (lower.contains("all") || lower.contains("everything")) {
                     action.setParameter("subaction", "storeall");
                 } else {
@@ -607,7 +596,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
                     }
                 }
             } else if (lower.contains("get") || lower.contains("take") || lower.contains("retrieve") ||
-                       lower.contains("grab")) {
+                       lower.contains("grab") || lower.contains("pegar") || lower.contains("tirar")) {
                 action.setParameter("subaction", "get");
                 // Try to extract item name and count
                 String[] getKeywords = {"get ", "take ", "retrieve ", "grab "};
@@ -632,9 +621,9 @@ SOPHISTICATED BACKPACKS (if mod is installed):
                     }
                 }
             } else if (lower.contains("list") || lower.contains("contents") || lower.contains("what's in") ||
-                       lower.contains("show me")) {
+                       lower.contains("show me") || lower.contains("listar") || lower.contains("conteúdo") || lower.contains("conteudo") || lower.contains("o que tem")) {
                 action.setParameter("subaction", "list");
-            } else if (lower.contains("organize") || lower.contains("sort")) {
+            } else if (lower.contains("organize") || lower.contains("sort") || lower.contains("organizar")) {
                 action.setParameter("subaction", "organize");
             } else {
                 action.setParameter("subaction", "info");
@@ -643,8 +632,9 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Elevator commands
-        if (lower.contains("elevator") || lower.contains("lift") ||
-            (lower.contains("go") && (lower.contains("up") || lower.contains("down")) && lower.contains("floor"))) {
+        if (lower.contains("elevator") || lower.contains("lift") || lower.contains("elevador") ||
+            (lower.contains("go") && (lower.contains("up") || lower.contains("down")) && lower.contains("floor")) ||
+            ((lower.contains("subir") || lower.contains("descer")) && lower.contains("andar"))) {
             CompanionAction action = new CompanionAction("elevator", text);
             if (lower.contains("up") || lower.contains("ascend") || lower.contains("higher")) {
                 action.setParameter("direction", "up");
@@ -688,7 +678,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
         }
 
         // Default to idle with the response as message
-        LLMoblings.LOGGER.info("No action keyword found, defaulting to idle");
+        LLMoblings.LOGGER.info("Nenhuma palavra-chave de ação encontrada; usando idle.");
         return new CompanionAction("idle", text);
     }
 
@@ -705,7 +695,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
             return parseResponse(response);
         } catch (Exception e) {
             LLMoblings.LOGGER.error("Ollama chatBlocking error: ", e);
-            return new CompanionAction("idle", "Sorry, I'm having trouble thinking right now.");
+            return new CompanionAction("idle", "Desculpa, estou com dificuldade para pensar agora.");
         }
     }
 
@@ -713,7 +703,7 @@ SOPHISTICATED BACKPACKS (if mod is installed):
      * Inject an observation into conversation history (used between loop iterations).
      */
     public void addSystemObservation(String observation) {
-        conversationHistory.add(new ChatMessage("user", "[OBSERVATION] " + observation));
+        conversationHistory.add(new ChatMessage("user", "[OBSERVAÇÃO] " + observation));
     }
 
     /**

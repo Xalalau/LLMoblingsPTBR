@@ -255,7 +255,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
                 Player owner = getOwner();
                 if (owner != null) {
                     owner.sendSystemMessage(Component.literal(
-                            "[" + getCompanionName() + "] I found a boat!"
+                            "[" + getCompanionName() + "] Encontrei um barco!"
                     ));
                 }
             } else if (nearestBoat != null) {
@@ -499,7 +499,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
                 Player owner = getOwner();
                 if (owner != null) {
                     owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                            "[" + getCompanionName() + "] *eats " + stack.getItem().getDescription().getString() + "* Healed " + (int) healAmount + " HP!"
+                            "[" + getCompanionName() + "] *come " + stack.getItem().getDescription().getString() + "* Recuperou " + (int) healAmount + " de vida!"
                     ));
                 }
 
@@ -548,7 +548,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
             Player owner = getOwner();
             if (owner != null) {
                 owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                        "[" + getCompanionName() + "] *equips " + betterWeapon.getItem().getDescription().getString() + "*"
+                        "[" + getCompanionName() + "] *equipa " + betterWeapon.getItem().getDescription().getString() + "*"
                 ));
             }
         }
@@ -589,7 +589,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
                 Player owner = getOwner();
                 if (owner != null) {
                     owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                            "[" + getCompanionName() + "] *equips " + betterArmor.getItem().getDescription().getString() + "*"
+                            "[" + getCompanionName() + "] *equipa " + betterArmor.getItem().getDescription().getString() + "*"
                     ));
                 }
             }

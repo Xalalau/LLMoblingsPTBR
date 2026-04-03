@@ -134,7 +134,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown Pokemon";
+            if (pokemon == null) return "Pokémon desconhecido";
 
             // Get species
             Method getSpeciesMethod = pokemon.getClass().getMethod("getSpecies");
@@ -148,7 +148,7 @@ public class CobblemonIntegration {
             LLMoblings.LOGGER.debug("Error getting Pokemon species: {}", e.getMessage());
         }
 
-        return "Pokemon";
+        return "Pokémon";
     }
 
     /**
@@ -287,7 +287,7 @@ public class CobblemonIntegration {
 
         StringBuilder sb = new StringBuilder();
         if (!name.equals(species)) {
-            sb.append(name).append(" the ");
+            sb.append(name).append(" o ");
         }
         if (shiny) {
             sb.append("shiny ");
@@ -308,7 +308,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown";
+            if (pokemon == null) return "Desconhecido";
 
             Method getNatureMethod = pokemon.getClass().getMethod("getNature");
             Object nature = getNatureMethod.invoke(pokemon);
@@ -324,7 +324,7 @@ public class CobblemonIntegration {
         } catch (Exception e) {
             LLMoblings.LOGGER.debug("Error getting Pokemon nature: {}", e.getMessage());
         }
-        return "Unknown";
+        return "Desconhecido";
     }
 
     /**
@@ -335,7 +335,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown";
+            if (pokemon == null) return "Desconhecido";
 
             Method getAbilityMethod = pokemon.getClass().getMethod("getAbility");
             Object ability = getAbilityMethod.invoke(pokemon);
@@ -347,7 +347,7 @@ public class CobblemonIntegration {
         } catch (Exception e) {
             LLMoblings.LOGGER.debug("Error getting Pokemon ability: {}", e.getMessage());
         }
-        return "Unknown";
+        return "Desconhecido";
     }
 
     /**
@@ -358,7 +358,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown";
+            if (pokemon == null) return "Desconhecido";
 
             Method getIVsMethod = pokemon.getClass().getMethod("getIvs");
             Object ivs = getIVsMethod.invoke(pokemon);
@@ -373,13 +373,13 @@ public class CobblemonIntegration {
                 int spe = getStatValue(ivs, "getSpeed", "speed");
 
                 int total = hp + atk + def + spa + spd + spe;
-                return String.format("HP:%d Atk:%d Def:%d SpA:%d SpD:%d Spe:%d (Total: %d/186)",
+                return String.format("HP:%d Atq:%d Def:%d AtqEsp:%d DefEsp:%d Vel:%d (Total: %d/186)",
                         hp, atk, def, spa, spd, spe, total);
             }
         } catch (Exception e) {
             LLMoblings.LOGGER.debug("Error getting Pokemon IVs: {}", e.getMessage());
         }
-        return "Unknown";
+        return "Desconhecido";
     }
 
     /**
@@ -390,7 +390,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown";
+            if (pokemon == null) return "Desconhecido";
 
             Method getEVsMethod = pokemon.getClass().getMethod("getEvs");
             Object evs = getEVsMethod.invoke(pokemon);
@@ -404,13 +404,13 @@ public class CobblemonIntegration {
                 int spe = getStatValue(evs, "getSpeed", "speed");
 
                 int total = hp + atk + def + spa + spd + spe;
-                return String.format("HP:%d Atk:%d Def:%d SpA:%d SpD:%d Spe:%d (Total: %d/510)",
+                return String.format("HP:%d Atq:%d Def:%d AtqEsp:%d DefEsp:%d Vel:%d (Total: %d/510)",
                         hp, atk, def, spa, spd, spe, total);
             }
         } catch (Exception e) {
             LLMoblings.LOGGER.debug("Error getting Pokemon EVs: {}", e.getMessage());
         }
-        return "Unknown";
+        return "Desconhecido";
     }
 
     /**
@@ -447,7 +447,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "Unknown";
+            if (pokemon == null) return "Desconhecido";
 
             Method getCurrentHealthMethod = pokemon.getClass().getMethod("getCurrentHealth");
             int currentHP = (Integer) getCurrentHealthMethod.invoke(pokemon);
@@ -463,7 +463,7 @@ public class CobblemonIntegration {
                 return (int) living.getHealth() + "/" + (int) living.getMaxHealth();
             }
         }
-        return "Unknown";
+        return "Desconhecido";
     }
 
     /**
@@ -491,7 +491,7 @@ public class CobblemonIntegration {
 
         try {
             Object pokemon = getPokemonData(entity);
-            if (pokemon == null) return "None";
+            if (pokemon == null) return "Nenhum";
 
             Method getHeldItemMethod = pokemon.getClass().getMethod("heldItem");
             Object heldItem = getHeldItemMethod.invoke(pokemon);
@@ -500,7 +500,7 @@ public class CobblemonIntegration {
                 // It's an ItemStack
                 Method isEmptyMethod = heldItem.getClass().getMethod("isEmpty");
                 if ((Boolean) isEmptyMethod.invoke(heldItem)) {
-                    return "None";
+                    return "Nenhum";
                 }
 
                 Method getHoverNameMethod = heldItem.getClass().getMethod("getHoverName");
@@ -513,7 +513,7 @@ public class CobblemonIntegration {
         } catch (Exception e) {
             LLMoblings.LOGGER.debug("Error getting Pokemon held item: {}", e.getMessage());
         }
-        return "None";
+        return "Nenhum";
     }
 
     /**
@@ -532,17 +532,17 @@ public class CobblemonIntegration {
         // Header
         sb.append("=== ");
         if (!name.equals(species)) {
-            sb.append(name).append(" the ");
+            sb.append(name).append(" o ");
         }
         if (shiny) sb.append("*Shiny* ");
         sb.append(species).append(" ===\n");
 
-        sb.append("Level: ").append(level).append("\n");
+        sb.append("Nível: ").append(level).append("\n");
         sb.append("HP: ").append(getPokemonHP(entity)).append("\n");
-        sb.append("Nature: ").append(getPokemonNature(entity)).append("\n");
-        sb.append("Ability: ").append(getPokemonAbility(entity)).append("\n");
-        sb.append("Friendship: ").append(getPokemonFriendship(entity)).append("/255\n");
-        sb.append("Held Item: ").append(getPokemonHeldItem(entity)).append("\n");
+        sb.append("Natureza: ").append(getPokemonNature(entity)).append("\n");
+        sb.append("Habilidade: ").append(getPokemonAbility(entity)).append("\n");
+        sb.append("Amizade: ").append(getPokemonFriendship(entity)).append("/255\n");
+        sb.append("Item segurado: ").append(getPokemonHeldItem(entity)).append("\n");
         sb.append("IVs: ").append(getPokemonIVs(entity)).append("\n");
         sb.append("EVs: ").append(getPokemonEVs(entity));
 
@@ -561,7 +561,7 @@ public class CobblemonIntegration {
         String ability = getPokemonAbility(entity);
         String ivs = getPokemonIVs(entity);
 
-        return String.format("%s (Lv.%d) - %s, %s | IVs: %s",
+        return String.format("%s (Nv.%d) - %s, %s | IVs: %s",
                 name, level, nature, ability, ivs);
     }
 }

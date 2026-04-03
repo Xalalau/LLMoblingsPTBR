@@ -107,7 +107,7 @@ public class BuildingTask {
 
         // Timeout protection
         if (ticksSinceProgress > GATHER_TIMEOUT && state == BuildState.GATHERING) {
-            fail("Took too long to gather materials. I'll need help!");
+            fail("Demorei demais para juntar os materiais. Vou precisar de ajuda!");
             return;
         }
 
@@ -129,7 +129,7 @@ public class BuildingTask {
     private void tickStarting() {
         // Validate build location
         if (!(companion.level() instanceof ServerLevel)) {
-            fail("Cannot build on client side.");
+            fail("Não posso construir no lado do cliente.");
             return;
         }
 
@@ -144,7 +144,7 @@ public class BuildingTask {
                 1.0
             );
             if (ticksInState > 600) { // 30 seconds to get there
-                fail("Can't reach the build site.");
+                fail("Não consigo alcançar o local da construção.");
             }
             return;
         }
@@ -793,15 +793,15 @@ public class BuildingTask {
         int percent = total > 0 ? (blocksPlaced * 100 / total) : 0;
 
         return switch (state) {
-            case STARTING -> "Getting ready...";
-            case CHECKING_MATERIALS -> "Checking materials...";
-            case GATHERING -> "Gathering " + (currentGatherTarget != null ?
-                BuiltInRegistries.ITEM.getKey(currentGatherTarget).getPath() : "materials") + "...";
-            case NAVIGATING_TO_STORAGE -> "Getting supplies...";
-            case SITE_PREP -> "Clearing the build site...";
-            case BUILDING -> percent + "% complete (" + blocksPlaced + "/" + total + " blocks)";
-            case COMPLETED -> "Done!";
-            case FAILED -> "Failed: " + failReason;
+            case STARTING -> "Me preparando...";
+            case CHECKING_MATERIALS -> "Verificando materiais...";
+            case GATHERING -> "Coletando " + (currentGatherTarget != null ?
+                BuiltInRegistries.ITEM.getKey(currentGatherTarget).getPath() : "materiais") + "...";
+            case NAVIGATING_TO_STORAGE -> "Buscando suprimentos...";
+            case SITE_PREP -> "Limpando o local da construção...";
+            case BUILDING -> percent + "% concluído (" + blocksPlaced + "/" + total + " blocos)";
+            case COMPLETED -> "Pronto!";
+            case FAILED -> "Falhou: " + failReason;
         };
     }
 

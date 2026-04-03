@@ -100,7 +100,7 @@ public class AutonomousTask {
 
     private void tickAssessing() {
         if (ticksInState == 1) {
-            report("Assessing the area...");
+            report("Avaliando a área...");
         }
 
         // Scan for storage containers
@@ -158,7 +158,7 @@ public class AutonomousTask {
                 baseResources.merge(name, stack.getCount(), Integer::sum);
             }
 
-            report("Found ME network access point!");
+            report("Encontrei um ponto de acesso da rede ME!");
         }
 
         LLMoblings.LOGGER.debug("Scanned {} storage containers + {} ME access points, found {} item types",
@@ -189,31 +189,31 @@ public class AutonomousTask {
                         // Vanilla storage
                         if (be instanceof ChestBlockEntity) {
                             containers.add(pos);
-                            storageTypes.merge("Chests", 1, Integer::sum);
+                            storageTypes.merge("Baús", 1, Integer::sum);
                         } else if (be instanceof BarrelBlockEntity) {
                             containers.add(pos);
-                            storageTypes.merge("Barrels", 1, Integer::sum);
+                            storageTypes.merge("Barris", 1, Integer::sum);
                         }
                         // Shulker boxes
                         else if (blockName.contains("shulker")) {
                             containers.add(pos);
-                            storageTypes.merge("Shulker Boxes", 1, Integer::sum);
+                            storageTypes.merge("Caixas de Shulker", 1, Integer::sum);
                         }
                         // Storage Drawers mod
                         else if (blockName.contains("drawer")) {
                             containers.add(pos);
-                            storageTypes.merge("Drawers", 1, Integer::sum);
+                            storageTypes.merge("Gavetas", 1, Integer::sum);
                         }
                         // Iron Chests / variants
                         else if (blockName.contains("iron_chest") || blockName.contains("gold_chest") ||
                                  blockName.contains("diamond_chest") || blockName.contains("obsidian_chest")) {
                             containers.add(pos);
-                            storageTypes.merge("Metal Chests", 1, Integer::sum);
+                            storageTypes.merge("Baús metálicos", 1, Integer::sum);
                         }
                         // Crates
                         else if (blockName.contains("crate")) {
                             containers.add(pos);
-                            storageTypes.merge("Crates", 1, Integer::sum);
+                            storageTypes.merge("Caixotes", 1, Integer::sum);
                         }
                         // Sophisticated Storage
                         else if (blockName.contains("sophisticated")) {
@@ -232,7 +232,7 @@ public class AutonomousTask {
 
         // Report what storage was found
         if (!storageTypes.isEmpty()) {
-            StringBuilder sb = new StringBuilder("Found storage: ");
+            StringBuilder sb = new StringBuilder("Armazenamento encontrado: ");
             storageTypes.forEach((type, count) -> sb.append(count).append(" ").append(type).append(", "));
             String report = sb.toString();
             if (report.endsWith(", ")) {
@@ -379,7 +379,7 @@ public class AutonomousTask {
                 LLMoblings.LOGGER.info("Added {} items, {} remaining", added, remaining.getCount());
             }
             if (totalFood > 0) {
-                report("Retrieved " + totalFood + " food from ME network.");
+                report("Recuperei " + totalFood + " de comida da rede ME.");
                 return true;
             }
         }
@@ -421,7 +421,7 @@ public class AutonomousTask {
                 for (ItemStack stack : weapons) {
                     ItemStack remaining = companion.addToInventory(stack);
                     if (remaining.getCount() < stack.getCount()) {
-                        report("Retrieved " + stack.getItem().getDescription().getString() + " from ME network!");
+                        report("Recuperei " + stack.getItem().getDescription().getString() + " da rede ME!");
                         gotGear = true;
                         break;
                     }
@@ -450,7 +450,7 @@ public class AutonomousTask {
                     for (ItemStack stack : armor) {
                         ItemStack remaining = companion.addToInventory(stack);
                         if (remaining.getCount() < stack.getCount()) {
-                            report("Retrieved " + stack.getItem().getDescription().getString() + " from ME network!");
+                            report("Recuperei " + stack.getItem().getDescription().getString() + " da rede ME!");
                             gotGear = true;
                             break;
                         }
@@ -489,7 +489,7 @@ public class AutonomousTask {
 
     private void tickHunting() {
         if (ticksInState == 1) {
-            report("Hunting for food...");
+            report("Caçando comida...");
             huntTarget = findHuntTarget();
             lastPosition = companion.position();
             stuckTicks = 0;
@@ -497,20 +497,20 @@ public class AutonomousTask {
             if (huntTarget != null) {
                 String targetName = BuiltInRegistries.ENTITY_TYPE.getKey(huntTarget.getType()).getPath()
                         .replace("_", " ");
-                report("Found a " + targetName + "! Going after it.");
+                report("Encontrei " + targetName + "! Vou atrás.");
             }
         }
 
         if (huntTarget == null || !huntTarget.isAlive()) {
             huntTarget = findHuntTarget();
             if (huntTarget == null) {
-                report("No animals nearby to hunt. I'll look elsewhere or try the ME network.");
+                report("Não há animais por perto para caçar. Vou procurar em outro lugar ou tentar a rede ME.");
                 changeState(AutonomousState.ASSESSING);
                 return;
             } else {
                 String targetName = BuiltInRegistries.ENTITY_TYPE.getKey(huntTarget.getType()).getPath()
                         .replace("_", " ");
-                report("Spotted a " + targetName + "!");
+                report("Avistei " + targetName + "!");
             }
         }
 
@@ -520,7 +520,7 @@ public class AutonomousTask {
             if (lastPosition != null && currentPos.distanceTo(lastPosition) < 1.0) {
                 stuckTicks += 60;
                 if (stuckTicks > 120) {  // Stuck for 6+ seconds
-                    report("Can't reach that animal, finding another...");
+                    report("Não consigo alcançar esse animal. Vou procurar outro...");
                     huntTarget = null;  // Give up on this target
                     stuckTicks = 0;
 
@@ -546,7 +546,7 @@ public class AutonomousTask {
             stuckTicks = 0;  // We're attacking, not stuck
 
             if (!huntTarget.isAlive()) {
-                report("Got one!");
+                report("Consegui pegar um!");
                 huntTarget = null;
                 // Check if we have enough food now
                 assessSelf();
@@ -563,7 +563,7 @@ public class AutonomousTask {
 
         // Timeout
         if (ticksInState > 600) {
-            report("Hunting taking too long, reassessing...");
+            report("A caça está demorando demais. Vou reavaliar...");
             changeState(AutonomousState.ASSESSING);
         }
     }
@@ -853,7 +853,7 @@ public class AutonomousTask {
 
     private void tickEquipping() {
         if (ticksInState == 1) {
-            report("Equipping gear...");
+            report("Equipando equipamento...");
         }
 
         // Find and equip items
@@ -868,7 +868,7 @@ public class AutonomousTask {
                     companion.getMainHandItem().isEmpty()) {
                 companion.setItemSlot(EquipmentSlot.MAINHAND, stack.copy());
                 companion.setItem(i, ItemStack.EMPTY);
-                report("Equipped " + item.getDescription().getString());
+                report("Equipei " + item.getDescription().getString());
                 continue;
             }
 
@@ -878,7 +878,7 @@ public class AutonomousTask {
                 if (companion.getItemBySlot(slot).isEmpty()) {
                     companion.setItemSlot(slot, stack.copy());
                     companion.setItem(i, ItemStack.EMPTY);
-                    report("Equipped " + item.getDescription().getString());
+                    report("Equipei " + item.getDescription().getString());
                 }
             }
         }
@@ -956,13 +956,13 @@ public class AutonomousTask {
         }
 
         if (deposited > 0) {
-            report("Stored " + deposited + " items.");
+            report("Guardei " + deposited + " itens.");
         }
     }
 
     private void tickRetrievingME() {
         if (meAccessPoint == null) {
-            report("Lost track of the ME terminal...");
+            report("Perdi o rastro do terminal ME...");
             changeState(AutonomousState.HUNTING);  // Fall back to hunting
             return;
         }
@@ -972,9 +972,9 @@ public class AutonomousTask {
 
         if (ticksInState == 1) {
             if (needsGear) {
-                report("Going to the ME terminal for gear...");
+                report("Indo ao terminal ME buscar equipamento...");
             } else {
-                report("Going to the ME terminal for food...");
+                report("Indo ao terminal ME buscar comida...");
             }
             lastPosition = companion.position();
             stuckTicks = 0;
@@ -988,7 +988,7 @@ public class AutonomousTask {
             if (lastPosition != null && currentPos.distanceTo(lastPosition) < 1.0) {
                 stuckTicks += 60;
                 if (stuckTicks > 180) {  // Stuck for 9+ seconds
-                    report("Can't reach the ME terminal...");
+                    report("Não consigo alcançar o terminal ME...");
                     stuckTicks = 0;
                     if (needsFood) {
                         changeState(AutonomousState.HUNTING);
@@ -1045,7 +1045,7 @@ public class AutonomousTask {
                         totalFood += stack.getCount() - remaining.getCount();
                     }
                     if (totalFood > 0) {
-                        report("Retrieved " + totalFood + " food from ME network!");
+                        report("Recuperei " + totalFood + " de comida da rede ME!");
                         gotSomething = true;
                         needs.remove("food");
                     }
@@ -1061,10 +1061,10 @@ public class AutonomousTask {
 
             // ME didn't have what we needed
             if (needsFood) {
-                report("Couldn't get food from ME network, going hunting...");
+                report("Não consegui comida na rede ME. Vou caçar...");
                 changeState(AutonomousState.HUNTING);
             } else if (needsGear) {
-                report("No gear available in ME network, patrolling anyway...");
+                report("Não há equipamento disponível na rede ME. Vou patrulhar mesmo assim...");
                 changeState(AutonomousState.PATROLLING);
             } else {
                 changeState(AutonomousState.ASSESSING);
@@ -1073,14 +1073,14 @@ public class AutonomousTask {
 
         // Timeout
         if (ticksInState > 400) {
-            report("Taking too long to reach ME terminal...");
+            report("Estou demorando demais para chegar ao terminal ME...");
             changeState(AutonomousState.HUNTING);
         }
     }
 
     private void tickExploring() {
         if (ticksInState == 1) {
-            report("Exploring the base...");
+            report("Explorando a base...");
         }
 
         // Choose a new exploration target if we don't have one or reached it
@@ -1113,12 +1113,12 @@ public class AutonomousTask {
         // Comment on interesting things found
         if (ticksInState % 200 == 0 && companion.getRandom().nextInt(3) == 0) {
             String[] explorationComments = {
-                "Interesting layout here...",
-                "*looks around curiously*",
-                "I should remember this spot.",
-                "Nice place you've got here!",
-                "What's over here?",
-                "*examines surroundings*"
+                "Layout interessante por aqui...",
+                "*olha em volta com curiosidade*",
+                "Eu deveria lembrar deste lugar.",
+                "Você montou um lugar legal aqui!",
+                "O que tem por aqui?",
+                "*observa os arredores*"
             };
             report(explorationComments[companion.getRandom().nextInt(explorationComments.length)]);
         }
@@ -1198,7 +1198,7 @@ public class AutonomousTask {
 
     private void tickPatrolling() {
         if (ticksInState == 1) {
-            report("Patrolling the area...");
+            report("Patrulhando a área...");
         }
 
         // Check for threats
@@ -1222,7 +1222,7 @@ public class AutonomousTask {
                 }
 
                 if (!nearest.isAlive() && reportCooldown <= 0) {
-                    report("Threat eliminated!");
+                    report("Ameaça eliminada!");
                     reportCooldown = 100;
                 }
                 return;
@@ -1256,7 +1256,7 @@ public class AutonomousTask {
 
     private void tickResting() {
         if (ticksInState == 1) {
-            report("Taking a break near base.");
+            report("Fazendo uma pausa perto da base.");
         }
 
         // Stay alert for threats even while resting!
@@ -1271,7 +1271,7 @@ public class AutonomousTask {
                         .orElse(null);
 
                 if (nearest != null && companion.distanceTo(nearest) < 16) {
-                    report("Hostile mob spotted! Switching to patrol mode!");
+                    report("Mob hostil avistado! Mudando para o modo de patrulha!");
                     changeState(AutonomousState.PATROLLING);
                     return;
                 }
@@ -1325,7 +1325,7 @@ public class AutonomousTask {
     }
 
     public String getStatusReport() {
-        return String.format("Mode: Autonomous (%s) | Food: %d | Armed: %s | Armored: %s",
-                currentState, foodCount, hasWeapon ? "Yes" : "No", hasArmor ? "Yes" : "No");
+        return String.format("Modo: Autônomo (%s) | Comida: %d | Armado: %s | Com armadura: %s",
+                currentState, foodCount, hasWeapon ? "Sim" : "Não", hasArmor ? "Sim" : "Não");
     }
 }

@@ -46,7 +46,7 @@ public class CompanionCommand {
         CommandSourceStack source = ctx.getSource();
 
         if (!(source.getEntity() instanceof ServerPlayer player)) {
-            source.sendFailure(Component.literal("This command can only be used by players."));
+            source.sendFailure(Component.literal("Este comando só pode ser usado por jogadores."));
             return 0;
         }
 
@@ -59,7 +59,7 @@ public class CompanionCommand {
 
         int maxCompanions = Config.MAX_COMPANIONS_PER_PLAYER.get();
         if (existing.size() >= maxCompanions) {
-            source.sendFailure(Component.literal("You already have " + maxCompanions + " companions. Dismiss one first."));
+            source.sendFailure(Component.literal("Você já tem " + maxCompanions + " companions. Dispense um primeiro."));
             return 0;
         }
 
@@ -67,7 +67,7 @@ public class CompanionCommand {
         boolean nameTaken = existing.stream()
                 .anyMatch(c -> c.getCompanionName().equalsIgnoreCase(name));
         if (nameTaken) {
-            source.sendFailure(Component.literal("You already have a companion named '" + name + "'."));
+            source.sendFailure(Component.literal("Você já tem um companion chamado '" + name + "'."));
             return 0;
         }
 
@@ -87,12 +87,12 @@ public class CompanionCommand {
                 // Re-set name and owner in case they were overwritten
                 companion.setCompanionName(name);
                 companion.setOwner(player);
-                source.sendSuccess(() -> Component.literal("Welcome back, " + name + "! (Inventory restored)"), false);
+                source.sendSuccess(() -> Component.literal("Bem-vindo de volta, " + name + "! (Inventário restaurado)"), false);
             } else {
-                source.sendSuccess(() -> Component.literal("Summoned companion '" + name + "'! Use @" + name + " <message> to talk to them."), false);
+                source.sendSuccess(() -> Component.literal("Companion '" + name + "' invocado! Use @" + name + " <mensagem> para falar com ele."), false);
             }
         } else {
-            source.sendSuccess(() -> Component.literal("Summoned companion '" + name + "'! Use @" + name + " <message> to talk to them."), false);
+            source.sendSuccess(() -> Component.literal("Companion '" + name + "' invocado! Use @" + name + " <mensagem> para falar com ele."), false);
         }
 
         player.level().addFreshEntity(companion);
@@ -105,7 +105,7 @@ public class CompanionCommand {
         CommandSourceStack source = ctx.getSource();
 
         if (!(source.getEntity() instanceof ServerPlayer player)) {
-            source.sendFailure(Component.literal("This command can only be used by players."));
+            source.sendFailure(Component.literal("Este comando só pode ser usado por jogadores."));
             return 0;
         }
 
@@ -116,7 +116,7 @@ public class CompanionCommand {
         );
 
         if (companions.isEmpty()) {
-            source.sendFailure(Component.literal("No companion named '" + name + "' found."));
+            source.sendFailure(Component.literal("Nenhum companion chamado '" + name + "' foi encontrado."));
             return 0;
         }
 
@@ -136,7 +136,7 @@ public class CompanionCommand {
             }
         }
 
-        source.sendSuccess(() -> Component.literal("Dismissed companion '" + name + "'. (Inventory saved)"), false);
+        source.sendSuccess(() -> Component.literal("Companion '" + name + "' dispensado. (Inventário salvo)"), false);
         return 1;
     }
 
@@ -144,7 +144,7 @@ public class CompanionCommand {
         CommandSourceStack source = ctx.getSource();
 
         if (!(source.getEntity() instanceof ServerPlayer player)) {
-            source.sendFailure(Component.literal("This command can only be used by players."));
+            source.sendFailure(Component.literal("Este comando só pode ser usado por jogadores."));
             return 0;
         }
 
@@ -155,7 +155,7 @@ public class CompanionCommand {
         );
 
         if (companions.isEmpty()) {
-            source.sendFailure(Component.literal("You have no companions to dismiss."));
+            source.sendFailure(Component.literal("Você não tem companions para dispensar."));
             return 0;
         }
 
@@ -177,7 +177,7 @@ public class CompanionCommand {
             }
         }
 
-        source.sendSuccess(() -> Component.literal("Dismissed " + count + " companion(s). (Inventory saved)"), false);
+        source.sendSuccess(() -> Component.literal("Dispensei " + count + " companion(s). (Inventário salvo)"), false);
         return 1;
     }
 
@@ -185,7 +185,7 @@ public class CompanionCommand {
         CommandSourceStack source = ctx.getSource();
 
         if (!(source.getEntity() instanceof ServerPlayer player)) {
-            source.sendFailure(Component.literal("This command can only be used by players."));
+            source.sendFailure(Component.literal("Este comando só pode ser usado por jogadores."));
             return 0;
         }
 
@@ -205,14 +205,23 @@ public class CompanionCommand {
         }
 
         if (allCompanions.isEmpty()) {
-            source.sendSuccess(() -> Component.literal("You have no companions. Use /companion summon <name> to create one."), false);
+            source.sendSuccess(() -> Component.literal("Você não tem companions. Use /companion summon <nome> para criar um."), false);
             return 1;
         }
 
-        StringBuilder sb = new StringBuilder("Your companions:\n");
+        StringBuilder sb = new StringBuilder("Seus companions:\n");
         for (CompanionEntity companion : allCompanions) {
             String state = companion.getAIController() != null ?
-                    companion.getAIController().getCurrentState().name() : "UNKNOWN";
+                    switch (companion.getAIController().getCurrentState()) {
+                        case IDLE -> "PARADO";
+                        case FOLLOWING -> "SEGUINDO";
+                        case GOING_TO -> "INDO";
+                        case MINING -> "MINERANDO";
+                        case ATTACKING -> "ATACANDO";
+                        case DEFENDING -> "DEFENDENDO";
+                        case AUTONOMOUS -> "AUTÔNOMO";
+                        case BUILDING -> "CONSTRUINDO";
+                    } : "DESCONHECIDO";
 
             // Get dimension name
             String dimName = companion.level().dimension().location().toString();
@@ -224,16 +233,16 @@ public class CompanionCommand {
             String distStr;
             if (companion.level().dimension().equals(player.level().dimension())) {
                 double dist = player.distanceTo(companion);
-                distStr = " (" + (int) dist + "m away)";
+                distStr = " (" + (int) dist + "m de distância)";
             } else {
                 distStr = " [" + dimName + "]";
             }
 
             sb.append(" - ").append(companion.getCompanionName())
                     .append(" (").append(state).append(")")
-                    .append(" HP: ").append((int) companion.getHealth())
+                    .append(" Vida: ").append((int) companion.getHealth())
                     .append("/").append((int) companion.getMaxHealth())
-                    .append(" at [").append((int) companion.getX())
+                    .append(" em [").append((int) companion.getX())
                     .append(", ").append((int) companion.getY())
                     .append(", ").append((int) companion.getZ()).append("]")
                     .append(distStr)
@@ -248,14 +257,14 @@ public class CompanionCommand {
         CommandSourceStack source = ctx.getSource();
 
         String help = """
-LLMoblings Commands:
-  /companion summon <name> - Summon a new AI companion
-  /companion dismiss <name> - Dismiss a specific companion
-  /companion dismiss - Dismiss all companions
-  /companion list - List your companions
+Comandos do LLMoblings:
+  /companion summon <nome> - Invoca um novo companion de IA
+  /companion dismiss <nome> - Dispensa um companion específico
+  /companion dismiss - Dispensa todos os companions
+  /companion list - Lista os seus companions
 
-Chat with companions using: @<name> <message>
-Example: @Alex follow me""";
+Fale com os companions usando: @<nome> <mensagem>
+Exemplo: @Alex me siga""";
 
         source.sendSuccess(() -> Component.literal(help), false);
         return 1;
