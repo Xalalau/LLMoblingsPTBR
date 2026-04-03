@@ -1,3 +1,13 @@
+# O que é isso?
+
+Eu encontrei esse LLMoblings, capaz de inserir um NPC de LLM no Minecraft, e vi que ele funcionava perfeitamente bem no Mine 1.21.1 (chei de mods) com NeoForge (mod loader mais utilizado) e Ollama (LLMs locais e acessíveis). Para melhorar a experiência, decidi pegar o ChatGPT e passar o mod inteiro para Português, além de mandar ele fazer correções e criar comportamentos.
+
+Note que apesar de eu ser um programador, não sou fluente em Java e muito menos em desenvolvimento de mods do Minecraft! Não me perturbem com PRs, issues nem manutenção. Claramente estou usando LLMs para criar o conteúdo e minha experiência para tomar as decisões e fazer pequenos remendos.
+
+Se quiserem testar, sigam os passos abaixo, em Inglês, e podem falar com a LLM totalmente em Português. Recomendo baixarem o modelo qwen2.5:7b-instruct e deixei o jar disponível na página de releases.
+
+- Xala
+
 # LLMoblings - LLM-Powered Mobs for Minecraft
 
 An AI-powered companion mod for NeoForge 1.21.1 that creates intelligent NPCs you can command using natural language. Companions are powered by Ollama LLM and can perform a wide variety of tasks autonomously.
