@@ -17,7 +17,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.levelgen.Heightmap;
 
+import java.text.Normalizer;
 import java.util.*;
 
 public class MiningTask {
@@ -34,6 +36,16 @@ public class MiningTask {
     private boolean completed = false;
     private boolean failed = false;
     private String failReason = null;
+
+    // Search behavior for requests like "go find wood".
+    private final BlockPos searchOrigin;
+    private BlockPos explorationTarget = null;
+    private int explorationStep = 0;
+    private int ticksMovingToExplorationTarget = 0;
+    private boolean announcedExploration = false;
+    private static final int MAX_EXPLORATION_STEPS = 12;
+    private static final int EXPLORATION_TIMEOUT_TICKS = 240;
+    private static final int EXPLORATION_REACH_DISTANCE = 6;
 
     // Block types that match the request
     private final Set<Block> targetBlocks = new HashSet<>();
@@ -58,10 +70,11 @@ public class MiningTask {
 
     public MiningTask(CompanionEntity companion, String blockName, int count, int searchRadius) {
         this.companion = companion;
-        this.targetBlockName = blockName.toLowerCase();
+        this.targetBlockName = normalizeResourceName(blockName);
         this.targetCount = count;
         this.searchRadius = searchRadius;
         this.homePos = companion.blockPosition();
+        this.searchOrigin = companion.blockPosition();
 
         resolveTargetBlocks();
         scanProtectedZones();
@@ -201,22 +214,52 @@ public class MiningTask {
         return true;
     }
 
+
+    private String normalizeResourceName(String blockName) {
+        String normalized = Normalizer.normalize(blockName, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT)
+                .replace(' ', '_');
+
+        return switch (normalized) {
+            case "madeira", "tronco", "arvore", "arvores", "lenha", "wood", "logs" -> "wood";
+            case "pedra" -> "stone";
+            case "carvao" -> "coal";
+            case "ferro" -> "iron";
+            case "ouro" -> "gold";
+            case "diamante" -> "diamond";
+            default -> normalized;
+        };
+    }
+
+    private boolean isOreRequest() {
+        return targetBlockName.contains("ore") || targetBlockName.contains("coal") || targetBlockName.contains("iron") ||
+                targetBlockName.contains("gold") || targetBlockName.contains("diamond") || targetBlockName.contains("copper");
+    }
+
     private void resolveTargetBlocks() {
         // Try to match block by name (partial matching for convenience)
         String searchTerm = targetBlockName.replace(" ", "_");
 
         // Common aliases
-        Map<String, String> aliases = Map.of(
-            "wood", "oak_log",
-            "logs", "oak_log",
-            "stone", "stone",
-            "cobble", "cobblestone",
-            "dirt", "dirt",
-            "iron", "iron_ore",
-            "gold", "gold_ore",
-            "diamond", "diamond_ore",
-            "coal", "coal_ore",
-            "copper", "copper_ore"
+        Map<String, String> aliases = Map.ofEntries(
+            Map.entry("wood", "oak_log"),
+            Map.entry("madeira", "oak_log"),
+            Map.entry("tronco", "oak_log"),
+            Map.entry("logs", "oak_log"),
+            Map.entry("stone", "stone"),
+            Map.entry("pedra", "stone"),
+            Map.entry("cobble", "cobblestone"),
+            Map.entry("dirt", "dirt"),
+            Map.entry("iron", "iron_ore"),
+            Map.entry("ferro", "iron_ore"),
+            Map.entry("gold", "gold_ore"),
+            Map.entry("ouro", "gold_ore"),
+            Map.entry("diamond", "diamond_ore"),
+            Map.entry("diamante", "diamond_ore"),
+            Map.entry("coal", "coal_ore"),
+            Map.entry("carvao", "coal_ore"),
+            Map.entry("copper", "copper_ore")
         );
 
         if (aliases.containsKey(searchTerm)) {
@@ -292,12 +335,19 @@ public class MiningTask {
 
                 if (currentTarget == null) {
                     ticksSinceLastProgress++;
-                    if (ticksSinceLastProgress > 200) { // 10 seconds without finding anything
+                    if (handleExplorationSearch()) {
+                        return;
+                    }
+                    if (ticksSinceLastProgress > 200) { // 10 seconds without finding anything nearby
                         failed = true;
-                        failReason = "I can't find any more " + targetBlockName + " nearby.";
+                        failReason = "Não consegui encontrar mais " + targetBlockName + ". Procurei pela área e mesmo saindo para buscar não achei nada útil.";
                     }
                     return;
                 }
+
+                explorationTarget = null;
+                ticksMovingToExplorationTarget = 0;
+                announcedExploration = false;
 
                 // Queue up connected blocks for ultimine-style mining
                 queueConnectedBlocks(currentTarget);
@@ -443,6 +493,83 @@ public class MiningTask {
                     companion.getCompanionName(), miningQueue.size() + 1);
             }
         }
+    }
+
+
+    private boolean handleExplorationSearch() {
+        if (explorationStep >= MAX_EXPLORATION_STEPS) {
+            return false;
+        }
+
+        if (explorationTarget == null) {
+            explorationTarget = chooseNextExplorationTarget();
+            ticksMovingToExplorationTarget = 0;
+            announcedExploration = false;
+            if (explorationTarget == null) {
+                explorationStep = MAX_EXPLORATION_STEPS;
+                return false;
+            }
+        }
+
+        double distance = companion.position().distanceTo(Vec3.atCenterOf(explorationTarget));
+        if (distance <= EXPLORATION_REACH_DISTANCE) {
+            LLMoblings.LOGGER.info("[{}] Reached exploration point {} while searching for {}",
+                    companion.getCompanionName(), explorationTarget, targetBlockName);
+            explorationTarget = null;
+            explorationStep++;
+            ticksMovingToExplorationTarget = 0;
+            announcedExploration = false;
+            return true;
+        }
+
+        if (!announcedExploration) {
+            LLMoblings.LOGGER.info("[{}] Couldn't find {} nearby, moving to search area {}",
+                    companion.getCompanionName(), targetBlockName, explorationTarget);
+            announcedExploration = true;
+        }
+
+        if (companion.getNavigation().isDone() || ticksMovingToExplorationTarget % 20 == 0) {
+            companion.getNavigation().moveTo(
+                    explorationTarget.getX() + 0.5,
+                    explorationTarget.getY(),
+                    explorationTarget.getZ() + 0.5,
+                    1.0
+            );
+        }
+
+        ticksMovingToExplorationTarget++;
+        if (ticksMovingToExplorationTarget > EXPLORATION_TIMEOUT_TICKS) {
+            LLMoblings.LOGGER.info("[{}] Search point {} timed out while looking for {}",
+                    companion.getCompanionName(), explorationTarget, targetBlockName);
+            explorationTarget = null;
+            explorationStep++;
+            ticksMovingToExplorationTarget = 0;
+            announcedExploration = false;
+        }
+
+        return true;
+    }
+
+    private BlockPos chooseNextExplorationTarget() {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+
+        int ring = explorationStep / 8 + 1;
+        int spoke = explorationStep % 8;
+        double angle = Math.toRadians(spoke * 45.0);
+        int distance = Math.min(24 * ring, 96);
+        int targetX = searchOrigin.getX() + (int) Math.round(Math.cos(angle) * distance);
+        int targetZ = searchOrigin.getZ() + (int) Math.round(Math.sin(angle) * distance);
+
+        int targetY;
+        if (isOreRequest()) {
+            targetY = Math.max(companion.blockPosition().getY(), 12);
+        } else {
+            targetY = serverLevel.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, targetX, targetZ);
+        }
+
+        return new BlockPos(targetX, targetY, targetZ);
     }
 
     private boolean isValidTarget(BlockPos pos) {

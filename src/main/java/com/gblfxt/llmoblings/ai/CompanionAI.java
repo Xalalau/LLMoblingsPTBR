@@ -2,6 +2,7 @@ package com.gblfxt.llmoblings.ai;
 
 import com.gblfxt.llmoblings.Config;
 import com.gblfxt.llmoblings.LLMoblings;
+import com.google.gson.JsonObject;
 import com.gblfxt.llmoblings.ai.blueprints.CottageBlueprint;
 import com.gblfxt.llmoblings.compat.AE2Integration;
 import com.gblfxt.llmoblings.compat.BuildingGadgetsIntegration;
@@ -30,6 +31,7 @@ import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.entity.EquipmentSlot;
 
+import java.text.Normalizer;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -69,6 +71,11 @@ public class CompanionAI {
 
     // Track who gave the last command (for follow, etc.)
     private Player commandGiver = null;
+
+    // Keep lightweight context so short follow-up commands like "vai atrás dela"
+    // can continue the last explicit task instead of being reinterpreted badly.
+    private CompanionAction lastExplicitCommand = null;
+    private int lastExplicitCommandTick = 0;
 
     public CompanionAI(CompanionEntity companion) {
         this.companion = companion;
@@ -136,6 +143,16 @@ public class CompanionAI {
 
         LLMoblings.LOGGER.info("[{}] Processing message from {}: {}", companion.getCompanionName(),
                 sender != null ? sender.getName().getString() : "unknown", message);
+
+        CompanionAction directAction = tryResolveDirectCommand(message, sender);
+        if (directAction != null) {
+            rememberExplicitCommand(directAction);
+            LLMoblings.LOGGER.info("[{}] Resolved direct command locally: {}",
+                    companion.getCompanionName(), directAction);
+            executeAction(directAction);
+            return;
+        }
+
         sendMessageToAll("Pensando...");
 
         if (Config.ACTION_LOOP_ENABLED.get()) {
@@ -143,6 +160,138 @@ public class CompanionAI {
         } else {
             pendingAction = ollamaClient.chat(message);
         }
+    }
+
+    private void rememberExplicitCommand(CompanionAction action) {
+        this.lastExplicitCommand = copyAction(action);
+        this.lastExplicitCommandTick = companion.tickCount;
+    }
+
+    private CompanionAction copyAction(CompanionAction action) {
+        return new CompanionAction(action.getAction(), action.getMessage(), action.getData().deepCopy());
+    }
+
+    private String normalizeCommandText(String text) {
+        String normalized = Normalizer.normalize(text, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase();
+        return normalized;
+    }
+
+    private int extractRequestedCount(String normalized) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?:^|\\D)(\\d{1,3})(?:\\D|$)").matcher(normalized);
+        if (matcher.find()) {
+            return Integer.parseInt(matcher.group(1));
+        }
+        if (normalized.contains("um ") || normalized.contains("uma ")) return 1;
+        if (normalized.contains("alguma") || normalized.contains("achar") || normalized.contains("quando achar")) return 1;
+        if (normalized.contains("pilha") || normalized.contains("bastante")) return 32;
+        return 16;
+    }
+
+    private CompanionAction buildGatherAction(String item, int count, int radius) {
+        JsonObject data = new JsonObject();
+        data.addProperty("item", item);
+        data.addProperty("count", count);
+        data.addProperty("radius", radius);
+        return new CompanionAction("gather", null, data);
+    }
+
+    private CompanionAction tryResolveDirectCommand(String message, Player sender) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+
+        String normalized = normalizeCommandText(message);
+
+        // Follow-up references like "vai atras dela entao" should continue the last
+        // explicit gathering/mining request instead of hallucinating a new intent.
+        if ((normalized.contains("vai atras") || normalized.contains("vai nela") || normalized.contains("vai buscar entao") ||
+                normalized.contains("procura entao") || normalized.contains("vai procurar entao")) &&
+                lastExplicitCommand != null && companion.tickCount - lastExplicitCommandTick < 20 * 45) {
+            String actionName = lastExplicitCommand.getAction().toLowerCase();
+            if (actionName.equals("gather") || actionName.equals("mine") || actionName.equals("farm") || actionName.equals("build")) {
+                return copyAction(lastExplicitCommand);
+            }
+        }
+
+        boolean mentionsHome = normalized.contains("casa");
+        boolean mentionsHere = normalized.contains("aqui") || normalized.contains("minha posicao") || normalized.contains("minha posicao") || normalized.contains("neste lugar") || normalized.contains("nesse lugar");
+        boolean mentionsSet = normalized.contains("marca") || normalized.contains("define") || normalized.contains("seta") || normalized.contains("salva") || normalized.contains("lembra") || normalized.contains("considera") || normalized.contains("vai ficar");
+        if (mentionsHome && mentionsHere && mentionsSet) {
+            JsonObject data = new JsonObject();
+            BlockPos pos = sender != null ? sender.blockPosition() : companion.blockPosition();
+            data.addProperty("x", pos.getX());
+            data.addProperty("y", pos.getY());
+            data.addProperty("z", pos.getZ());
+            return new CompanionAction("sethome", null, data);
+        }
+
+        if ((normalized.contains("vai ate sua casa") || normalized.contains("vai para sua casa") || normalized.contains("volta para sua casa") ||
+                normalized.contains("vai pra sua casa") || normalized.contains("vai pra casa") || normalized.contains("volta pra casa") ||
+                normalized.contains("vai para casa")) && !mentionsSet) {
+            return new CompanionAction("home", null);
+        }
+
+        if ((normalized.contains("teletransporta pra mim") || normalized.contains("teleporta pra mim") || normalized.contains("tp pra mim") ||
+                normalized.contains("tpa pra mim") || normalized.contains("teletransporte ate mim") || normalized.contains("teletransporta ate mim")) && sender != null) {
+            JsonObject data = new JsonObject();
+            data.addProperty("target", sender.getName().getString());
+            return new CompanionAction("tpa", null, data);
+        }
+
+        if (normalized.contains("vem exatamente na minha posicao") || normalized.contains("vem ate mim") ||
+                normalized.contains("vem aqui") || normalized.contains("venha aqui") || normalized.contains("cola em mim")) {
+            return new CompanionAction("come", null);
+        }
+
+        if (normalized.contains("me segue") || normalized.contains("segue me") || normalized.contains("segue comigo") ||
+                normalized.contains("vem comigo") || normalized.contains("siga me")) {
+            return new CompanionAction("follow", null);
+        }
+
+        if ((normalized.contains("seja autonomo") || normalized.contains("fica autonomo") || normalized.contains("fique autonomo") ||
+                normalized.contains("modo autonomo") || normalized.contains("seja independente") || normalized.contains("aja por conta propria"))) {
+            return new CompanionAction("auto", null);
+        }
+
+        if ((normalized.contains("fica aqui") || normalized.contains("espere aqui") || normalized.contains("para aqui") ||
+                normalized.equals("fica") || normalized.equals("parar") || normalized.equals("pare"))) {
+            return new CompanionAction("stay", null);
+        }
+
+        if (normalized.contains("colhe") || normalized.contains("colher") || normalized.contains("plantacao") || normalized.contains("plantacoes") ||
+                normalized.contains("planta") || normalized.contains("fazenda")) {
+            JsonObject data = new JsonObject();
+            data.addProperty("radius", 24);
+            return new CompanionAction("farm", null, data);
+        }
+
+        boolean wantsResource = normalized.contains("procura") || normalized.contains("buscar") || normalized.contains("coleta") ||
+                normalized.contains("coletar") || normalized.contains("pega") || normalized.contains("corta") ||
+                normalized.contains("achar") || normalized.contains("acha") || normalized.contains("vai atras");
+        if (wantsResource) {
+            int count = extractRequestedCount(normalized);
+            int radius = normalized.contains("longe") || normalized.contains("floresta") || normalized.contains("mais longe") ? 40 : 32;
+
+            if (normalized.contains("madeira") || normalized.contains("tronco") || normalized.contains("arvore") || normalized.contains("lenha") || normalized.contains("log")) {
+                return buildGatherAction("wood", count, radius);
+            }
+            if (normalized.contains("carvao") || normalized.contains("coal")) {
+                return buildGatherAction("coal", count, radius);
+            }
+            if (normalized.contains("ferro") || normalized.contains("iron")) {
+                return buildGatherAction("iron", count, radius);
+            }
+            if (normalized.contains("pedra") || normalized.contains("stone") || normalized.contains("cobblestone") || normalized.contains("cobble")) {
+                return buildGatherAction("stone", count, radius);
+            }
+            if (normalized.contains("diamante") || normalized.contains("diamond")) {
+                return buildGatherAction("diamond", count, radius);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -341,8 +490,16 @@ public class CompanionAI {
             case "mine", "gather" -> {
                 String block = action.getString("block", action.getString("item", "stone"));
                 int count = action.getInt("count", 1);
-                startMining(block, count);
+                int radius = action.getInt("radius", 32);
+                startMining(block, count, radius);
                 return ActionResult.terminal("mine", "Comecei a minerar " + block);
+            }
+            case "farm", "harvest" -> {
+                int radius = action.getInt("radius", 16);
+                int harvested = farmNearbyCrops(radius);
+                return ActionResult.terminal("farm", harvested > 0
+                        ? "Colhi " + harvested + " plantações maduras"
+                        : "Não encontrei plantações maduras por perto");
             }
             case "attack" -> {
                 String target = action.getString("target", "hostile");
@@ -382,7 +539,13 @@ public class CompanionAI {
                 return ActionResult.terminal("setbed", "Cama definida");
             }
             case "sethome" -> {
-                setHomeHere();
+                if (action.has("x") && action.has("y") && action.has("z")) {
+                    setHomeAt(new BlockPos(action.getInt("x", (int) companion.getX()),
+                            action.getInt("y", (int) companion.getY()),
+                            action.getInt("z", (int) companion.getZ())));
+                } else {
+                    setHomeHere();
+                }
                 return ActionResult.terminal("sethome", "Casa definida");
             }
             case "home" -> {
@@ -750,14 +913,46 @@ public class CompanionAI {
     }
 
     private void comeToOwner() {
-        Player owner = companion.getOwner();
-        if (owner != null) {
-            goTo(owner.blockPosition());
+        Player target = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
+        if (target != null) {
+            goTo(target.blockPosition());
         }
     }
 
-    private void startMining(String blockType, int count) {
-        miningTask = new MiningTask(companion, blockType, count, 32);
+    private int farmNearbyCrops(int radius) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            sendMessage("Não consegui acessar o mundo para colher as plantações.");
+            return 0;
+        }
+
+        List<BlockPos> crops = UltimineHelper.findMatureCrops(serverLevel, companion.blockPosition(), radius);
+        if (crops.isEmpty()) {
+            sendMessage("Não encontrei plantações maduras por perto.");
+            return 0;
+        }
+
+        int harvested = 0;
+        for (BlockPos cropPos : crops) {
+            if (UltimineHelper.harvestAndReplant(serverLevel, cropPos, companion)) {
+                harvested++;
+                if (harvested >= 32) {
+                    break;
+                }
+            }
+        }
+
+        if (harvested > 0) {
+            sendMessage("Colhi " + harvested + " plantações maduras.");
+        } else {
+            sendMessage("Não consegui colher as plantações que encontrei.");
+        }
+
+        return harvested;
+    }
+
+    private void startMining(String blockType, int count, int radius) {
+        int effectiveRadius = Math.max(24, radius);
+        miningTask = new MiningTask(companion, blockType, count, effectiveRadius);
 
         if (miningTask.isFailed()) {
             sendMessage(miningTask.getFailReason());
@@ -767,7 +962,7 @@ public class CompanionAI {
         }
 
         currentState = AIState.MINING;
-        sendMessage("Vou começar a coletar " + count + " de " + blockType + ". Vou procurar num raio de 32 blocos.");
+        sendMessage("Vou começar a coletar " + count + " de " + blockType + ". Vou procurar por perto e também vou sair para buscar se não encontrar aqui.");
         personality.onTaskStart("mining");
     }
 
@@ -1577,7 +1772,11 @@ public class CompanionAI {
     }
 
     private void setHomeHere() {
-        homePos = companion.blockPosition();
+        setHomeAt(companion.blockPosition());
+    }
+
+    private void setHomeAt(BlockPos pos) {
+        homePos = pos;
         sendMessage("Casa definida! Vou lembrar deste lugar em [" +
                 homePos.getX() + ", " + homePos.getY() + ", " + homePos.getZ() + "].");
         LLMoblings.LOGGER.info("[{}] Set home position to {}", companion.getCompanionName(), homePos);
@@ -1588,7 +1787,7 @@ public class CompanionAI {
                 String command = "sethome " + companion.getCompanionName().toLowerCase().replace(" ", "_");
                 serverLevel.getServer().getCommands().performPrefixedCommand(
                         serverLevel.getServer().createCommandSourceStack()
-                                .withPosition(companion.position())
+                                .withPosition(Vec3.atCenterOf(homePos))
                                 .withPermission(2),
                         command
                 );
@@ -2193,7 +2392,8 @@ public class CompanionAI {
     }
 
     private void requestTeleport(String targetPlayer) {
-        if (targetPlayer == null || targetPlayer.isEmpty()) {
+        String normalizedTarget = targetPlayer == null ? "" : normalizeCommandText(targetPlayer).trim();
+        if (normalizedTarget.isEmpty() || normalizedTarget.equals("player") || normalizedTarget.equals("me") || normalizedTarget.equals("mim") || normalizedTarget.equals("owner")) {
             // Default to teleporting to whoever gave the command
             Player target = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
             if (target != null) {

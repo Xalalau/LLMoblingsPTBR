@@ -124,7 +124,7 @@ COMBATE:
 RECURSOS:
 - {"action": "mine", "block": "diamond_ore", "count": 10} - Minerar blocos
 - {"action": "gather", "item": "oak_log", "count": 64} - Coletar itens
-- {"action": "farm"} - Colher plantações próximas
+- {"action": "farm", "radius": 16} - Colher plantações maduras próximas e replantar quando possível
 
 INVENTÁRIO:
 - {"action": "equip"} - Equipar a melhor arma do inventário
@@ -364,6 +364,11 @@ SOPHISTICATED BACKPACKS:
         }
         if (lower.contains("hunt") || lower.contains("food") || lower.contains("eat") || lower.contains("caçar") || lower.contains("comida") || lower.contains("comer")) {
             return new CompanionAction("auto", text);  // Auto mode handles hunting
+        }
+        if (lower.contains("farm") || lower.contains("harvest") || lower.contains("crop") ||
+            lower.contains("planta") || lower.contains("colhe") || lower.contains("colher") ||
+            lower.contains("plantação") || lower.contains("plantacao")) {
+            return new CompanionAction("farm", text);
         }
         if (lower.contains("gear") || lower.contains("equip") || lower.contains("armor") || lower.contains("weapon") || lower.contains("equipar") || lower.contains("armadura") || lower.contains("arma")) {
             return new CompanionAction("auto", text);  // Auto mode handles equipping
