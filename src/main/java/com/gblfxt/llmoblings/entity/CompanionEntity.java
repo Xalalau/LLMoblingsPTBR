@@ -60,6 +60,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
     private final NonNullList<ItemStack> armorSlots = NonNullList.withSize(4, ItemStack.EMPTY);
     private ItemStack offhandItem = ItemStack.EMPTY;
     private int selectedSlot = 0;
+    private long lastManualEatTick = -200;
 
     // AI Controller
     private CompanionAI aiController;
@@ -479,6 +480,11 @@ public class CompanionEntity extends PathfinderMob implements Container {
     }
 
     public boolean eatFoodFromInventory(String preferredItem) {
+        // Prevent repeated manual eat calls from consuming multiple foods in a short loop.
+        if (this.tickCount - lastManualEatTick < 20) {
+            return false;
+        }
+
         int preferredSlot = findFoodSlot(preferredItem);
         if (preferredSlot >= 0) {
             return consumeFoodFromSlot(preferredSlot);
@@ -555,8 +561,9 @@ public class CompanionEntity extends PathfinderMob implements Container {
         }
 
         ItemStack before = stack.copy();
-        float healAmount = foodProps.nutrition() * 0.5f;
-        this.heal(healAmount);
+        float healAmount = Math.max(2.0f, (float) foodProps.nutrition());
+        float newHealth = Math.min(this.getMaxHealth(), this.getHealth() + healAmount);
+        this.setHealth(newHealth);
 
         stack.shrink(1);
         ItemStack after = stack;
@@ -569,6 +576,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
             setItemSlot(EquipmentSlot.MAINHAND, after.copy());
         }
 
+        lastManualEatTick = this.tickCount;
         this.swing(InteractionHand.MAIN_HAND, true);
         this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.5f, 1.0f);
 
