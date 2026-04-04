@@ -11,6 +11,7 @@ import com.gblfxt.llmoblings.compat.CobblemonIntegration;
 import com.gblfxt.llmoblings.compat.SophisticatedBackpacksIntegration;
 import com.gblfxt.llmoblings.entity.CompanionEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -20,12 +21,15 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.SwordItem;
 import net.minecraft.world.item.AxeItem;
@@ -78,6 +82,12 @@ public class CompanionAI {
     // can continue the last explicit task instead of being reinterpreted badly.
     private CompanionAction lastExplicitCommand = null;
     private int lastExplicitCommandTick = 0;
+
+    // Recovery for navigation failures, pits and simple vertical traps.
+    private Vec3 lastMovementSamplePos = null;
+    private int movementStuckTicks = 0;
+    private int nextMovementRecoveryTick = 0;
+    private int lastRecoveryMessageTick = -200;
 
     public CompanionAI(CompanionEntity companion) {
         this.companion = companion;
@@ -661,6 +671,7 @@ public class CompanionAI {
         // Follow whoever gave the command, or owner if no one specified
         Player followTarget = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
         if (followTarget == null) {
+            resetMovementRecovery();
             currentState = AIState.IDLE;
             return;
         }
@@ -676,21 +687,27 @@ public class CompanionAI {
             companion.getNavigation().stop();
         }
 
+        handleMovementRecovery(followTarget.position());
+
         // Teleport if too far
         if (distance > 32) {
             Vec3 targetPos = followTarget.position();
             companion.teleportTo(targetPos.x, targetPos.y, targetPos.z);
+            resetMovementRecovery();
         }
     }
 
     private void tickGoTo() {
         if (targetPos == null) {
+            resetMovementRecovery();
             currentState = AIState.IDLE;
             return;
         }
 
         double distance = companion.position().distanceTo(Vec3.atCenterOf(targetPos));
         if (distance < 3.0) {
+            resetMovementRecovery();
+
             // Check for pending gear request first
             if (pendingGearRequest != null && companion.level() instanceof ServerLevel serverLevel) {
                 GearRequest req = pendingGearRequest;
@@ -719,10 +736,243 @@ public class CompanionAI {
             sendMessage("Cheguei ao destino.");
             currentState = AIState.IDLE;
             targetPos = null;
-        } else if (companion.getNavigation().isDone()) {
-            // Recalculate path
-            companion.getNavigation().moveTo(targetPos.getX(), targetPos.getY(), targetPos.getZ(), 1.0);
+        } else {
+            if (companion.getNavigation().isDone()) {
+                // Recalculate path
+                companion.getNavigation().moveTo(targetPos.getX(), targetPos.getY(), targetPos.getZ(), 1.0);
+            }
+            handleMovementRecovery(Vec3.atCenterOf(targetPos));
         }
+    }
+
+    private void resetMovementRecovery() {
+        lastMovementSamplePos = companion.position();
+        movementStuckTicks = 0;
+        nextMovementRecoveryTick = 0;
+    }
+
+    private void handleMovementRecovery(Vec3 desiredPos) {
+        if (desiredPos == null) {
+            resetMovementRecovery();
+            return;
+        }
+
+        Vec3 currentPos = companion.position();
+        if (lastMovementSamplePos == null) {
+            lastMovementSamplePos = currentPos;
+            movementStuckTicks = 0;
+            return;
+        }
+
+        double moved = currentPos.distanceTo(lastMovementSamplePos);
+        boolean hasGoal = currentPos.distanceTo(desiredPos) > 2.5;
+        boolean pathing = !companion.getNavigation().isDone() || hasGoal;
+        boolean shouldWatchForStuck = pathing && (isLikelyInPit() || desiredPos.y > currentPos.y + 1.2 || companion.horizontalCollision);
+
+        if (!shouldWatchForStuck) {
+            if (moved > 0.18 || !pathing) {
+                movementStuckTicks = 0;
+                lastMovementSamplePos = currentPos;
+            }
+            return;
+        }
+
+        if (moved < 0.08) {
+            movementStuckTicks++;
+        } else {
+            movementStuckTicks = 0;
+            lastMovementSamplePos = currentPos;
+            return;
+        }
+
+        if (movementStuckTicks < 30 || companion.tickCount < nextMovementRecoveryTick) {
+            return;
+        }
+
+        if (companion.tickCount - lastRecoveryMessageTick > 80) {
+            sendMessage("Fiquei preso. Vou tentar sair daqui.");
+            lastRecoveryMessageTick = companion.tickCount;
+        }
+
+        if (tryJumpTowardNearbyLedge(desiredPos) || tryDigEscapeRoute(desiredPos) || tryPillarOutOfPit()) {
+            movementStuckTicks = 0;
+            lastMovementSamplePos = companion.position();
+            nextMovementRecoveryTick = companion.tickCount + 15;
+            return;
+        }
+
+        nextMovementRecoveryTick = companion.tickCount + 20;
+    }
+
+    private boolean isLikelyInPit() {
+        BlockPos feet = companion.blockPosition();
+        int solidSides = 0;
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos sidePos = feet.relative(direction);
+            BlockState sideState = companion.level().getBlockState(sidePos);
+            if (!sideState.isAir() && sideState.isFaceSturdy(companion.level(), sidePos, direction.getOpposite())) {
+                solidSides++;
+            }
+        }
+
+        boolean floorSolid = companion.level().getBlockState(feet.below()).isFaceSturdy(companion.level(), feet.below(), Direction.UP);
+        boolean headClear = companion.level().getBlockState(feet).isAir() && companion.level().getBlockState(feet.above()).isAir();
+        boolean wantsUpwardMovement = targetPos != null && targetPos.getY() > feet.getY() + 1;
+        return floorSolid && headClear && (solidSides >= 3 || (solidSides >= 2 && wantsUpwardMovement));
+    }
+
+    private boolean tryJumpTowardNearbyLedge(Vec3 desiredPos) {
+        BlockPos feet = companion.blockPosition();
+        Direction preferred = getPreferredHorizontalDirection(desiredPos);
+        Direction[] directions = orderDirections(preferred);
+
+        for (Direction direction : directions) {
+            BlockPos wallPos = feet.relative(direction);
+            BlockPos ledgeFeet = wallPos.above();
+            if (!companion.level().getBlockState(wallPos).isFaceSturdy(companion.level(), wallPos, Direction.UP)) {
+                continue;
+            }
+            if (!canStandAt(ledgeFeet)) {
+                continue;
+            }
+
+            Vec3 ledgeCenter = Vec3.atBottomCenterOf(ledgeFeet);
+            companion.getLookControl().setLookAt(ledgeCenter.x, ledgeCenter.y + 0.5, ledgeCenter.z);
+            Vec3 push = ledgeCenter.subtract(companion.position());
+            if (push.lengthSqr() > 1.0E-4) {
+                push = push.normalize().scale(0.18);
+                companion.setDeltaMovement(push.x, Math.max(companion.getDeltaMovement().y, 0.42), push.z);
+            }
+            companion.getJumpControl().jump();
+            companion.getNavigation().moveTo(ledgeCenter.x, ledgeCenter.y, ledgeCenter.z, 1.0);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean tryDigEscapeRoute(Vec3 desiredPos) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+
+        BlockPos feet = companion.blockPosition();
+        Direction preferred = getPreferredHorizontalDirection(desiredPos);
+        Direction[] directions = orderDirections(preferred);
+
+        for (Direction direction : directions) {
+            BlockPos front = feet.relative(direction);
+            BlockPos upperFront = front.above();
+            if (tryBreakForEscape(serverLevel, front) | tryBreakForEscape(serverLevel, upperFront)) {
+                companion.swing(InteractionHand.MAIN_HAND, true);
+                companion.getNavigation().moveTo(front.getX() + 0.5, front.getY(), front.getZ() + 0.5, 1.0);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean tryBreakForEscape(ServerLevel serverLevel, BlockPos pos) {
+        BlockState state = serverLevel.getBlockState(pos);
+        if (state.isAir() || state.getDestroySpeed(serverLevel, pos) < 0 || state.getFluidState().isSource()) {
+            return false;
+        }
+        if (state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN) || state.is(Blocks.CRYING_OBSIDIAN) || state.is(Blocks.REINFORCED_DEEPSLATE)) {
+            return false;
+        }
+        boolean removed = serverLevel.destroyBlock(pos, true, companion);
+        if (removed) {
+            companion.gameEvent(net.minecraft.world.level.gameevent.GameEvent.BLOCK_DESTROY);
+        }
+        return removed;
+    }
+
+    private boolean tryPillarOutOfPit() {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+
+        BlockPos feet = companion.blockPosition();
+        BlockPos head = feet.above();
+        if (!companion.onGround() || !serverLevel.getBlockState(feet).isAir() || !serverLevel.getBlockState(head).isAir()) {
+            return false;
+        }
+
+        int slot = findDisposableBlockSlot();
+        if (slot < 0) {
+            return false;
+        }
+
+        AABB raisedBox = companion.getBoundingBox().move(0.0, 1.05, 0.0);
+        if (!serverLevel.noCollision(companion, raisedBox)) {
+            return false;
+        }
+
+        ItemStack stack = companion.getItem(slot);
+        if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
+            return false;
+        }
+
+        BlockState placeState = blockItem.getBlock().defaultBlockState();
+        companion.setPos(companion.getX(), companion.getY() + 1.01, companion.getZ());
+        if (!serverLevel.setBlockAndUpdate(feet, placeState)) {
+            companion.setPos(companion.getX(), companion.getY() - 1.01, companion.getZ());
+            return false;
+        }
+
+        stack.shrink(1);
+        if (stack.isEmpty()) {
+            companion.setItem(slot, ItemStack.EMPTY);
+        } else {
+            companion.setItem(slot, stack);
+        }
+        if (slot == companion.getSelectedSlot()) {
+            companion.setItemSlot(EquipmentSlot.MAINHAND, companion.getItem(slot).copy());
+        }
+
+        companion.swing(InteractionHand.MAIN_HAND, true);
+        companion.getNavigation().stop();
+        return true;
+    }
+
+    private int findDisposableBlockSlot() {
+        for (int slot = 0; slot < companion.getContainerSize(); slot++) {
+            ItemStack stack = companion.getItem(slot);
+            if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
+                continue;
+            }
+
+            BlockState state = blockItem.getBlock().defaultBlockState();
+            if (state.is(Blocks.DIRT) || state.is(Blocks.COARSE_DIRT) || state.is(Blocks.COBBLESTONE)
+                    || state.is(Blocks.COBBLED_DEEPSLATE) || state.is(Blocks.NETHERRACK)
+                    || state.is(Blocks.GRAVEL) || state.is(Blocks.SAND)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private boolean canStandAt(BlockPos feetPos) {
+        BlockPos below = feetPos.below();
+        BlockState floor = companion.level().getBlockState(below);
+        return floor.isFaceSturdy(companion.level(), below, Direction.UP)
+                && companion.level().getBlockState(feetPos).isAir()
+                && companion.level().getBlockState(feetPos.above()).isAir();
+    }
+
+    private Direction getPreferredHorizontalDirection(Vec3 desiredPos) {
+        Vec3 delta = desiredPos.subtract(companion.position());
+        if (Math.abs(delta.x) >= Math.abs(delta.z)) {
+            return delta.x >= 0 ? Direction.EAST : Direction.WEST;
+        }
+        return delta.z >= 0 ? Direction.SOUTH : Direction.NORTH;
+    }
+
+    private Direction[] orderDirections(Direction preferred) {
+        Direction left = preferred.getClockWise();
+        Direction right = preferred.getCounterClockWise();
+        Direction back = preferred.getOpposite();
+        return new Direction[] { preferred, left, right, back };
     }
 
     private void tickMining() {
@@ -958,11 +1208,13 @@ public class CompanionAI {
 
     // Action implementations
     private void startFollowing() {
+        resetMovementRecovery();
         currentState = AIState.FOLLOWING;
         sendMessage("Vou te seguir!");
     }
 
     private void stopAndStay() {
+        resetMovementRecovery();
         currentState = AIState.IDLE;
         companion.getNavigation().stop();
         sendMessage("Vou ficar aqui.");
@@ -970,6 +1222,7 @@ public class CompanionAI {
 
     private void goTo(BlockPos pos) {
         targetPos = pos;
+        resetMovementRecovery();
         currentState = AIState.GOING_TO;
         companion.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 1.0);
     }
@@ -1013,10 +1266,10 @@ public class CompanionAI {
         // Try to find entity type by name
         EntityType<?> specificType = null;
         if (targetType != null && !targetType.isEmpty() && !targetType.equalsIgnoreCase("hostile")) {
-            // Try with minecraft namespace first, then without
-            ResourceLocation typeId = targetType.contains(":")
-                    ? ResourceLocation.tryParse(targetType)
-                    : ResourceLocation.withDefaultNamespace(targetType);
+            String normalizedTarget = normalizeEntityTargetName(targetType);
+            ResourceLocation typeId = normalizedTarget.contains(":")
+                    ? ResourceLocation.tryParse(normalizedTarget)
+                    : ResourceLocation.withDefaultNamespace(normalizedTarget);
             if (typeId != null && BuiltInRegistries.ENTITY_TYPE.containsKey(typeId)) {
                 specificType = BuiltInRegistries.ENTITY_TYPE.get(typeId);
             }
@@ -1064,6 +1317,18 @@ public class CompanionAI {
         return entities.stream()
                 .min(Comparator.comparingDouble(e -> companion.distanceTo(e)))
                 .orElse(null);
+    }
+
+    private String normalizeEntityTargetName(String targetType) {
+        String normalized = normalizeCommandText(targetType).trim().replace(' ', '_');
+        return switch (normalized) {
+            case "zumbi" -> "zombie";
+            case "esqueleto" -> "skeleton";
+            case "aranha" -> "spider";
+            case "enderman", "homem_do_fim" -> "enderman";
+            case "armadilo", "tatuzinho", "tatu" -> "armadillo";
+            default -> normalized;
+        };
     }
 
     private Entity findAttackTarget() {
