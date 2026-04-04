@@ -28,61 +28,79 @@ public final class ActionRegistry {
 
     private record ActionDoc(String group, String json, String description) {}
 
+    private static final String MOV = "MOVIMENTO";
+    private static final String COMB = "COMBATE";
+    private static final String REC = "RECURSOS";
+    private static final String INV = "INVENTÁRIO";
+    private static final String EQP = "EQUIPAMENTO";
+    private static final String UTI = "UTILIDADES";
+    private static final String HOME = "CASA";
+    private static final String TP = "TELEPORTE";
+    private static final String BUILD = "CONSTRUÇÃO";
+    private static final String PKM = "POKÉMON BUDDY";
+    private static final String GADGET = "BUILDING GADGETS";
+    private static final String BACKPACK = "SOPHISTICATED BACKPACKS";
+
+    private static ActionDoc doc(String categoria, String json, String descricao) {
+        return new ActionDoc(categoria, json, descricao);
+    }
+
     private static final List<ActionDoc> ACTIONS = List.of(
-        new ActionDoc(
-            "MOVIMENTO",
-            "{\"action\": \"follow\"}",
-            "Seguir o jogador"
-        ),
-        new ActionDoc("MOVIMENTO", "{\"action\": \"stay\"}", "Parar no lugar"),
-        new ActionDoc(
-            "MOVIMENTO",
-            "{\"action\": \"come\"}",
-            "Vir até o jogador"
-        ),
-        new ActionDoc(
-            "MOVIMENTO",
-            "{\"action\": \"goto\", \"x\": 100, \"y\": 64, \"z\": 200}",
-            "Ir para coordenadas"
-        ),
-        new ActionDoc(
-            "RECURSOS",
-            "{\"action\": \"gather\", \"item\": \"dirt\", \"count\": 16}",
-            "Coletar um recurso nomeado"
-        ),
-        new ActionDoc(
-            "UTILIDADES",
-            "{\"action\": \"status\"}",
-            "Relatar estado atual"
-        ),
-        new ActionDoc(
-            "UTILIDADES",
-            "{\"action\": \"inventory\"}",
-            "Relatar inventário"
-        ),
-        new ActionDoc(
-            "UTILIDADES",
-            "{\"action\": \"deposit\"}",
-            "Guardar itens próximos"
-        ),
-        new ActionDoc(
-            "COMBATE",
-            "{\"action\": \"defend\"}",
-            "Defender o jogador"
-        ),
-        new ActionDoc("COMBATE", "{\"action\": \"retreat\"}", "Recuar"),
-        new ActionDoc(
-            "UTILIDADES",
-            "{\"action\": \"equip\"}",
-            "Equipar o melhor equipamento disponível"
-        ),
-        new ActionDoc("CASA", "{\"action\": \"sethome\"}", "Marcar casa aqui"),
-        new ActionDoc("CASA", "{\"action\": \"home\"}", "Ir para casa"),
-        new ActionDoc(
-            "CASA",
-            "{\"action\": \"sleep\"}",
-            "Dormir na cama mais próxima"
-        )
+        doc(MOV, "{\"action\": \"follow\"}", "Seguir o jogador"),
+        doc(MOV, "{\"action\": \"stay\"}", "Parar e ficar no lugar"),
+        doc(MOV, "{\"action\": \"goto\", \"x\": X, \"y\": Y, \"z\": Z}", "Ir para coordenadas específicas"),
+        doc(MOV, "{\"action\": \"come\"}", "Vir até a localização do jogador"),
+
+        doc(COMB, "{\"action\": \"attack\", \"target\": \"zombie\"}", "Atacar um mob específico"),
+        doc(COMB, "{\"action\": \"defend\"}", "Defender o jogador de inimigos"),
+        doc(COMB, "{\"action\": \"retreat\"}", "Recuar diante do perigo"),
+
+        doc(REC, "{\"action\": \"mine\", \"block\": \"diamond_ore\", \"count\": X}", "Minerar blocos específicos"),
+        doc(REC, "{\"action\": \"gather\", \"item\": \"oak_log\", \"count\": X}", "Coletar itens específicos"),
+        doc(REC, "{\"action\": \"farm\"}", "Cuidar e colher plantações próximas"),
+
+        doc(INV, "{\"action\": \"equip\"}", "Equipar a melhor arma do inventário"),
+        doc(INV, "{\"action\": \"inventory\"}", "Relatar o conteúdo do inventário"),
+        doc(INV, "{\"action\": \"give\", \"item\": \"diamond\", \"count\": X}", "Entregar itens ao jogador"),
+
+        doc(EQP, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME (cria se necessário)"),
+        doc(EQP, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME"),
+        doc(EQP, "{\"action\": \"deposit\"}", "Depositar todos os itens na rede ME ou em um baú próximo, mantendo o equipamento"),
+        doc(EQP, "{\"action\": \"deposit\", \"keepGear\": false}", "Depositar tudo, inclusive armas e armaduras"),
+
+        doc(UTI, "{\"action\": \"status\"}", "Relatar vida, fome e inventário"),
+        doc(UTI, "{\"action\": \"scan\", \"radius\": X}", "Escanear recursos e mobs em um raio"),
+        doc(UTI, "{\"action\": \"auto\"}", "Agir de forma totalmente autônoma"),
+        doc(UTI, "{\"action\": \"idle\"}", "Só conversar, sem executar ação"),
+
+        doc(HOME, "{\"action\": \"home\"}", "Teleportar para casa"),
+        doc(HOME, "{\"action\": \"sethome\"}", "Definir a posição atual como casa"),
+        doc(HOME, "{\"action\": \"sleep\"}", "Dormir na cama mais próxima"),
+
+        doc(TP, "{\"action\": \"tpa\", \"target\": \"player\"}", "Teleportar até um jogador"),
+        doc(TP, "{\"action\": \"tpaccept\"}", "Aceitar pedido de teleporte"),
+        doc(TP, "{\"action\": \"tpdeny\"}", "Recusar pedido de teleporte"),
+
+        doc(BUILD, "{\"action\": \"build\", \"structure\": \"cottage\", \"here\": true}", "Construir uma cottage no local atual"),
+        doc(BUILD, "{\"action\": \"build\", \"structure\": \"cottage\", \"x\": X, \"y\": Y, \"z\": Z}", "Construir em coordenadas específicas"),
+
+        doc(PKM, "{\"action\": \"pokemon\", \"subaction\": \"find\"}", "Criar vínculo com o Pokémon mais próximo do jogador"),
+        doc(PKM, "{\"action\": \"pokemon\", \"subaction\": \"find\", \"name\": \"Pikachu\"}", "Criar vínculo com um Pokémon específico"),
+        doc(PKM, "{\"action\": \"pokemon\", \"subaction\": \"release\"}", "Liberar o buddy atual"),
+        doc(PKM, "{\"action\": \"pokemon\", \"subaction\": \"status\"}", "Verificar o buddy atual"),
+
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"info\"}", "Ver o gadget atual e sua configuração"),
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"equip\"}", "Equipar um gadget do inventário"),
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"setblock\", \"block\": \"stone\"}", "Definir o bloco que o gadget irá colocar"),
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"setrange\", \"range\": X}", "Definir o alcance do gadget"),
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"configure\", \"block\": \"cobblestone\", \"range\": X}", "Configurar bloco e alcance do gadget"),
+        doc(GADGET, "{\"action\": \"gadget\", \"subaction\": \"build\"}", "Usar o gadget para colocar blocos"),
+
+        doc(BACKPACK, "{\"action\": \"backpack\", \"subaction\": \"info\"}", "Ver o status da mochila"),
+        doc(BACKPACK, "{\"action\": \"backpack\", \"subaction\": \"store\", \"item\": \"cobblestone\"}", "Guardar um item específico na mochila"),
+        doc(BACKPACK, "{\"action\": \"backpack\", \"subaction\": \"storeall\"}", "Guardar todos os itens não essenciais na mochila"),
+        doc(BACKPACK, "{\"action\": \"backpack\", \"subaction\": \"get\", \"item\": \"diamond\", \"count\": X}", "Retirar itens da mochila"),
+        doc(BACKPACK, "{\"action\": \"backpack\", \"subaction\": \"list\"}", "Listar o conteúdo da mochila")
     );
 
     private static final Pattern COUNT_PATTERN = Pattern.compile(
