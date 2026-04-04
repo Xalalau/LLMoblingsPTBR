@@ -562,8 +562,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
 
         ItemStack before = stack.copy();
         float healAmount = Math.max(2.0f, (float) foodProps.nutrition());
-        float newHealth = Math.min(this.getMaxHealth(), this.getHealth() + healAmount);
-        this.setHealth(newHealth);
+        this.setHealth(Math.min(this.getMaxHealth(), this.getHealth() + healAmount));
 
         stack.shrink(1);
         ItemStack after = stack;
