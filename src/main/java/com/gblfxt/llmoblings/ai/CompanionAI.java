@@ -2,6 +2,7 @@ package com.gblfxt.llmoblings.ai;
 
 import com.gblfxt.llmoblings.Config;
 import com.gblfxt.llmoblings.LLMoblings;
+import com.gblfxt.llmoblings.ai.commands.ActionRegistry;
 import com.google.gson.JsonObject;
 import com.gblfxt.llmoblings.ai.blueprints.CottageBlueprint;
 import com.gblfxt.llmoblings.compat.AE2Integration;
@@ -55,6 +56,7 @@ public class CompanionAI {
     private BlockPos targetPos = null;
     private Entity targetEntity = null;
     private MiningTask miningTask = null;
+    private FarmingTask farmingTask = null;
     private AutonomousTask autonomousTask = null;
     private BuildingTask buildingTask = null;
 
@@ -119,6 +121,7 @@ public class CompanionAI {
             case FOLLOWING -> tickFollow();
             case GOING_TO -> tickGoTo();
             case MINING -> tickMining();
+            case FARMING -> tickFarming();
             case ATTACKING -> tickAttacking();
             case DEFENDING -> tickDefending();
             case AUTONOMOUS -> tickAutonomous();
@@ -144,7 +147,13 @@ public class CompanionAI {
         LLMoblings.LOGGER.info("[{}] Processing message from {}: {}", companion.getCompanionName(),
                 sender != null ? sender.getName().getString() : "unknown", message);
 
-        CompanionAction directAction = tryResolveDirectCommand(message, sender);
+        CompanionAction directAction = ActionRegistry.tryResolveDirectCommand(
+                companion,
+                sender,
+                message,
+                lastExplicitCommand,
+                companion.tickCount - lastExplicitCommandTick
+        );
         if (directAction != null) {
             rememberExplicitCommand(directAction);
             LLMoblings.LOGGER.info("[{}] Resolved direct command locally: {}",
@@ -495,11 +504,9 @@ public class CompanionAI {
                 return ActionResult.terminal("mine", "Comecei a minerar " + block);
             }
             case "farm", "harvest" -> {
-                int radius = action.getInt("radius", 16);
-                int harvested = farmNearbyCrops(radius);
-                return ActionResult.terminal("farm", harvested > 0
-                        ? "Colhi " + harvested + " plantações maduras"
-                        : "Não encontrei plantações maduras por perto");
+                int radius = action.getInt("radius", 24);
+                startFarming(radius);
+                return ActionResult.terminal("farm", "Comecei a cuidar da fazenda");
             }
             case "attack" -> {
                 String target = action.getString("target", "hostile");
@@ -519,6 +526,14 @@ public class CompanionAI {
                 int count = action.getInt("count", 1);
                 giveItems(item, count);
                 return ActionResult.terminal("give", "Entreguei os itens");
+            }
+            case "eat" -> {
+                String item = action.getString("item", "");
+                boolean ate = companion.eatFoodFromInventory(item);
+                if (ate) {
+                    return ActionResult.terminal("eat", item.isBlank() ? "Comi alguma coisa" : "Comi " + item);
+                }
+                return ActionResult.failure("eat", item.isBlank() ? "Nao encontrei comida no inventario" : "Nao encontrei " + item + " para comer");
             }
             case "explore", "wander", "look around" -> {
                 int radius = action.getInt("radius", 32);
@@ -731,6 +746,35 @@ public class CompanionAI {
         }
     }
 
+    private void tickFarming() {
+        if (farmingTask == null) {
+            currentState = AIState.IDLE;
+            return;
+        }
+
+        farmingTask.tick();
+
+        if (farmingTask.isCompleted()) {
+            sendMessage("Terminei o trabalho na fazenda. Colhi " + farmingTask.getHarvestedCount() + " colheitas maduras.");
+            personality.onTaskComplete();
+            farmingTask = null;
+            currentState = AIState.IDLE;
+            return;
+        }
+
+        if (farmingTask.isFailed()) {
+            sendMessage(farmingTask.getFailReason());
+            personality.doSadEmote();
+            farmingTask = null;
+            currentState = AIState.IDLE;
+            return;
+        }
+
+        if (companion.tickCount % 100 == 0) {
+            sendMessage(farmingTask.getProgressReport());
+        }
+    }
+
     private void tickAttacking() {
         if (targetEntity == null || !targetEntity.isAlive()) {
             // Find new target
@@ -919,35 +963,11 @@ public class CompanionAI {
         }
     }
 
-    private int farmNearbyCrops(int radius) {
-        if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            sendMessage("Não consegui acessar o mundo para colher as plantações.");
-            return 0;
-        }
-
-        List<BlockPos> crops = UltimineHelper.findMatureCrops(serverLevel, companion.blockPosition(), radius);
-        if (crops.isEmpty()) {
-            sendMessage("Não encontrei plantações maduras por perto.");
-            return 0;
-        }
-
-        int harvested = 0;
-        for (BlockPos cropPos : crops) {
-            if (UltimineHelper.harvestAndReplant(serverLevel, cropPos, companion)) {
-                harvested++;
-                if (harvested >= 32) {
-                    break;
-                }
-            }
-        }
-
-        if (harvested > 0) {
-            sendMessage("Colhi " + harvested + " plantações maduras.");
-        } else {
-            sendMessage("Não consegui colher as plantações que encontrei.");
-        }
-
-        return harvested;
+    private void startFarming(int radius) {
+        farmingTask = new FarmingTask(companion, radius);
+        currentState = AIState.FARMING;
+        sendMessage("Vou cuidar da fazenda: colher o que estiver maduro, replantar e recolher os itens.");
+        personality.onTaskStart("farming");
     }
 
     private void startMining(String blockType, int count, int radius) {
@@ -1039,13 +1059,19 @@ public class CompanionAI {
 
     private void startAutonomous(int radius) {
         autonomousTask = new AutonomousTask(companion, radius);
+        if (homePos != null) {
+            autonomousTask.setHomePos(homePos);
+        }
         currentState = AIState.AUTONOMOUS;
-        sendMessage("Entrando no modo autônomo. Vou avaliar a área, procurar comida, me equipar e patrulhar. Diga 'parar' ou 'seguir' para eu voltar ao normal.");
+        sendMessage("Entrando no modo autônomo. Vou avaliar a área, procurar comida, me equipar, cuidar da fazenda quando fizer sentido e patrulhar a base.");
     }
 
     private void startExploring(int radius) {
         autonomousTask = new AutonomousTask(companion, radius);
-        autonomousTask.setExploring();  // Start directly in explore mode
+        if (homePos != null) {
+            autonomousTask.setHomePos(homePos);
+        }
+        autonomousTask.setExploring();
         currentState = AIState.AUTONOMOUS;
         sendMessage("Vou explorar a área. Posso abrir portas e verificar lugares interessantes.");
     }
@@ -1709,17 +1735,23 @@ public class CompanionAI {
     }
 
     private String buildStatusReport() {
-        float health = companion.getHealth();
-        float maxHealth = companion.getMaxHealth();
-        int itemCount = 0;
-        for (int i = 0; i < companion.getContainerSize(); i++) {
-            if (!companion.getItem(i).isEmpty()) itemCount++;
+        WorldQueries.InventorySummary inventory = WorldQueries.summarizeInventory(companion);
+        WorldQueries.ThreatSummary threats = WorldQueries.summarizeThreats(companion, 16);
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Vida: %.0f/%.0f", companion.getHealth(), companion.getMaxHealth()));
+        sb.append(", Estado: ").append(currentState);
+        sb.append(", Inventário: ").append(inventory.totalItems()).append(" itens em ")
+                .append(inventory.usedSlots()).append(" slots");
+        sb.append(", Comida: ").append(inventory.foodItems());
+        sb.append(", Ferramentas:");
+        if (inventory.hasPickaxe()) sb.append(" picareta");
+        if (inventory.hasAxe()) sb.append(" machado");
+        if (inventory.hasHoe()) sb.append(" enxada");
+        if (inventory.hasWeapon()) sb.append(" arma");
+        if (threats.hostileCount() > 0) {
+            sb.append(", Hostis próximos: ").append(threats.hostileCount());
         }
-
-        return String.format(
-                "Vida: %.0f/%.0f, Inventário: %d/%d slots usados, Estado: %s",
-                health, maxHealth, itemCount, companion.getContainerSize(), currentState
-        );
+        return sb.toString().replaceAll("\\s+", " ").trim();
     }
 
     private void reportStatus() {
@@ -1733,13 +1765,28 @@ public class CompanionAI {
         List<LivingEntity> friendlies = companion.level().getEntitiesOfClass(LivingEntity.class, scanBox,
                 e -> !(e instanceof Monster) && !(e instanceof Player));
 
-        String report = String.format(
-                "Varredura concluída! Encontrei %d mobs hostis e %d mobs passivos em um raio de %d blocos.",
-                hostiles.size(), friendlies.size(), radius
-        );
+        StringBuilder report = new StringBuilder();
+        report.append("Escaneamento concluído. ")
+                .append("Hostis: ").append(hostiles.size())
+                .append(", criaturas passivas: ").append(friendlies.size())
+                .append(", raio: ").append(radius).append(" blocos");
+
+        WorldQueries.StorageSummary storage = WorldQueries.summarizeStorage(companion, companion.blockPosition(), Math.min(radius, 24));
+        if (storage.totalContainers() > 0) {
+            report.append(", armazenamento: ").append(storage.totalContainers());
+        }
+
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            WorldQueries.CropSummary crops = WorldQueries.summarizeCrops(serverLevel, companion, companion.blockPosition(), Math.min(radius, 24));
+            if (crops.matureCrops() > 0 || crops.emptyFarmland() > 0) {
+                report.append(", fazenda: maduras ").append(crops.matureCrops())
+                        .append(" / vazios ").append(crops.emptyFarmland());
+            }
+        }
+
         LLMoblings.LOGGER.info("[{}] Scan: {} hostiles, {} friendlies in {}m radius",
                 companion.getCompanionName(), hostiles.size(), friendlies.size(), radius);
-        return report;
+        return report.toString();
     }
 
     private void scanArea(int radius) {
@@ -1777,6 +1824,9 @@ public class CompanionAI {
 
     private void setHomeAt(BlockPos pos) {
         homePos = pos;
+        if (autonomousTask != null) {
+            autonomousTask.setHomePos(pos);
+        }
         sendMessage("Casa definida! Vou lembrar deste lugar em [" +
                 homePos.getX() + ", " + homePos.getY() + ", " + homePos.getZ() + "].");
         LLMoblings.LOGGER.info("[{}] Set home position to {}", companion.getCompanionName(), homePos);
@@ -2701,6 +2751,7 @@ public class CompanionAI {
         FOLLOWING,
         GOING_TO,
         MINING,
+        FARMING,
         ATTACKING,
         DEFENDING,
         AUTONOMOUS,

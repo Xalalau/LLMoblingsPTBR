@@ -557,45 +557,64 @@ public class UltimineHelper {
         }
 
         Block block = state.getBlock();
-        String blockId = BuiltInRegistries.BLOCK.getKey(block).getPath();
 
-        // Get drops
+        // Get drops before breaking so we can reserve one seed for replanting without duping.
         List<ItemStack> drops = Block.getDrops(state, level, pos, null, companion, ItemStack.EMPTY);
+        boolean reservedSeed = reserveSeedForReplant(block, drops, companion);
 
         // Break the block
         level.destroyBlock(pos, false, companion);
 
-        // Spawn drops
+        // Spawn drops (already adjusted if one seed was reserved)
         for (ItemStack drop : drops) {
+            if (drop.isEmpty()) {
+                continue;
+            }
             ItemEntity itemEntity = new ItemEntity(level,
                 pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, drop);
             itemEntity.setDefaultPickUpDelay();
             level.addFreshEntity(itemEntity);
         }
 
-        // Replant if it's a replantable crop
-        if (block instanceof CropBlock) {
-            // Find seed in drops or companion inventory
-            ItemStack seed = findSeedFor(block, drops, companion);
-            if (!seed.isEmpty()) {
-                // Replant
-                level.setBlockAndUpdate(pos, block.defaultBlockState());
-                seed.shrink(1);
-                return true;
-            }
+        if (block instanceof CropBlock && reservedSeed) {
+            level.setBlockAndUpdate(pos, block.defaultBlockState());
         }
 
         return true;
     }
 
-    /**
-     * Find appropriate seed for replanting.
-     */
-    private static ItemStack findSeedFor(Block crop, List<ItemStack> drops, CompanionEntity companion) {
-        String cropId = BuiltInRegistries.BLOCK.getKey(crop).getPath();
 
-        // Map crops to their seeds
-        String seedId = switch (cropId) {
+    private static boolean reserveSeedForReplant(Block crop, List<ItemStack> drops, CompanionEntity companion) {
+        String seedId = getSeedIdForCrop(crop);
+        if (seedId == null) return false;
+
+        for (ItemStack drop : drops) {
+            String itemId = BuiltInRegistries.ITEM.getKey(drop.getItem()).getPath();
+            if (itemId.equals(seedId) && drop.getCount() > 0) {
+                drop.shrink(1);
+                return true;
+            }
+        }
+
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty()) continue;
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+            if (itemId.equals(seedId)) {
+                stack.shrink(1);
+                if (stack.isEmpty()) {
+                    companion.setItem(i, ItemStack.EMPTY);
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static String getSeedIdForCrop(Block crop) {
+        String cropId = BuiltInRegistries.BLOCK.getKey(crop).getPath();
+        return switch (cropId) {
             case "wheat" -> "wheat_seeds";
             case "carrots" -> "carrot";
             case "potatoes" -> "potato";
@@ -603,21 +622,25 @@ public class UltimineHelper {
             case "nether_wart" -> "nether_wart";
             default -> null;
         };
+    }
 
+    /**
+     * Find appropriate seed for replanting.
+     */
+    private static ItemStack findSeedFor(Block crop, List<ItemStack> drops, CompanionEntity companion) {
+        String seedId = getSeedIdForCrop(crop);
         if (seedId == null) return ItemStack.EMPTY;
 
-        // Check drops first
         for (ItemStack drop : drops) {
             String itemId = BuiltInRegistries.ITEM.getKey(drop.getItem()).getPath();
-            if (itemId.equals(seedId) && drop.getCount() > 1) {
-                // Keep one for replanting
+            if (itemId.equals(seedId) && drop.getCount() > 0) {
                 return drop;
             }
         }
 
-        // Check companion inventory
         for (int i = 0; i < companion.getContainerSize(); i++) {
             ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty()) continue;
             String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
             if (itemId.equals(seedId)) {
                 return stack;

@@ -1,5 +1,6 @@
 package com.gblfxt.llmoblings.ai;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.jetbrains.annotations.Nullable;
 
@@ -19,8 +20,8 @@ public class CompanionAction {
     }
 
     public static CompanionAction fromJson(JsonObject json) {
-        String action = json.has("action") ? json.get("action").getAsString() : "idle";
-        String message = json.has("message") ? json.get("message").getAsString() : null;
+        String action = getStringValue(json, "action", "idle");
+        String message = getNullableStringValue(json, "message");
         return new CompanionAction(action, message, json);
     }
 
@@ -38,19 +39,62 @@ public class CompanionAction {
     }
 
     public String getString(String key, String defaultValue) {
-        return data.has(key) ? data.get(key).getAsString() : defaultValue;
+        return getStringValue(data, key, defaultValue);
     }
 
     public int getInt(String key, int defaultValue) {
-        return data.has(key) ? data.get(key).getAsInt() : defaultValue;
+        if (!data.has(key)) return defaultValue;
+        JsonElement element = data.get(key);
+        if (element == null || element.isJsonNull()) return defaultValue;
+        try {
+            return element.getAsInt();
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
     }
 
     public double getDouble(String key, double defaultValue) {
-        return data.has(key) ? data.get(key).getAsDouble() : defaultValue;
+        if (!data.has(key)) return defaultValue;
+        JsonElement element = data.get(key);
+        if (element == null || element.isJsonNull()) return defaultValue;
+        try {
+            return element.getAsDouble();
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
     }
 
     public boolean getBoolean(String key, boolean defaultValue) {
-        return data.has(key) ? data.get(key).getAsBoolean() : defaultValue;
+        if (!data.has(key)) return defaultValue;
+        JsonElement element = data.get(key);
+        if (element == null || element.isJsonNull()) return defaultValue;
+        try {
+            return element.getAsBoolean();
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static String getStringValue(JsonObject json, String key, String defaultValue) {
+        if (!json.has(key)) return defaultValue;
+        JsonElement element = json.get(key);
+        if (element == null || element.isJsonNull()) return defaultValue;
+        try {
+            return element.getAsString();
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static String getNullableStringValue(JsonObject json, String key) {
+        if (!json.has(key)) return null;
+        JsonElement element = json.get(key);
+        if (element == null || element.isJsonNull()) return null;
+        try {
+            return element.getAsString();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     public boolean has(String key) {

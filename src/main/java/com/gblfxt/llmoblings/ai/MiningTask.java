@@ -9,6 +9,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Container;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
@@ -18,6 +19,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.gameevent.GameEvent;
 
 import java.text.Normalizer;
 import java.util.*;
@@ -29,6 +31,8 @@ public class MiningTask {
     private final int searchRadius;
 
     private int minedCount = 0;
+    private int collectedCount = 0;
+    private final int initialMatchingInventoryCount;
     private BlockPos currentTarget = null;
     private int miningProgress = 0;
     private int ticksAtCurrentBlock = 0;
@@ -43,6 +47,7 @@ public class MiningTask {
     private int explorationStep = 0;
     private int ticksMovingToExplorationTarget = 0;
     private boolean announcedExploration = false;
+    private BlockPos animatedBreakTarget = null;
     private static final int MAX_EXPLORATION_STEPS = 12;
     private static final int EXPLORATION_TIMEOUT_TICKS = 240;
     private static final int EXPLORATION_REACH_DISTANCE = 6;
@@ -79,6 +84,7 @@ public class MiningTask {
         resolveTargetBlocks();
         scanProtectedZones();
         findMEAccessPoint();
+        this.initialMatchingInventoryCount = recountCollectedItems();
 
         if (targetBlocks.isEmpty()) {
             failed = true;
@@ -223,6 +229,8 @@ public class MiningTask {
 
         return switch (normalized) {
             case "madeira", "tronco", "arvore", "arvores", "lenha", "wood", "logs" -> "wood";
+            case "terra", "terras", "dirt", "grass_block", "grama", "bloco_de_grama" -> "dirt";
+            case "cenoura", "cenouras", "carrot", "carrots" -> "carrot";
             case "pedra" -> "stone";
             case "carvao" -> "coal";
             case "ferro" -> "iron";
@@ -235,6 +243,11 @@ public class MiningTask {
     private boolean isOreRequest() {
         return targetBlockName.contains("ore") || targetBlockName.contains("coal") || targetBlockName.contains("iron") ||
                 targetBlockName.contains("gold") || targetBlockName.contains("diamond") || targetBlockName.contains("copper");
+    }
+
+    private boolean isWoodRequest() {
+        return targetBlockName.contains("wood") || targetBlockName.contains("log") || targetBlockName.contains("madeira") ||
+                targetBlockName.contains("tronco") || targetBlockName.contains("arvore") || targetBlockName.contains("árvore");
     }
 
     private void resolveTargetBlocks() {
@@ -251,6 +264,14 @@ public class MiningTask {
             Map.entry("pedra", "stone"),
             Map.entry("cobble", "cobblestone"),
             Map.entry("dirt", "dirt"),
+            Map.entry("terra", "dirt"),
+            Map.entry("terras", "dirt"),
+            Map.entry("grama", "grass_block"),
+            Map.entry("bloco_de_grama", "grass_block"),
+            Map.entry("carrot", "carrots"),
+            Map.entry("carrots", "carrots"),
+            Map.entry("cenoura", "carrots"),
+            Map.entry("cenouras", "carrots"),
             Map.entry("iron", "iron_ore"),
             Map.entry("ferro", "iron_ore"),
             Map.entry("gold", "gold_ore"),
@@ -302,17 +323,21 @@ public class MiningTask {
 
     public void tick() {
         if (completed || failed) {
+            clearBreakAnimation();
             return;
         }
 
-        // Check if we've collected enough
-        if (minedCount >= targetCount) {
+        // Pick up nearby items first, then resync the count from inventory before
+        // deciding if the task is done.
+        pickupNearbyItems();
+        collectedCount = Math.max(0, recountCollectedItems() - initialMatchingInventoryCount);
+
+        // A gathering task should complete when the companion has actually obtained
+        // enough matching items, not merely broken enough blocks.
+        if (collectedCount >= targetCount) {
             completed = true;
             return;
         }
-
-        // Pick up nearby items
-        pickupNearbyItems();
 
         // Get next target from queue or find new one
         if (currentTarget == null || !isValidTarget(currentTarget)) {
@@ -382,11 +407,26 @@ public class MiningTask {
             }
         }
 
-        // Move towards target
-        double distance = companion.position().distanceTo(Vec3.atCenterOf(currentTarget));
+        // Move towards a sensible adjacent standing position instead of trying to
+        // path into the block being mined.
+        double blockDistance = companion.position().distanceTo(Vec3.atCenterOf(currentTarget));
+        BlockPos standPos = findBestStandPosition(currentTarget);
+        double standDistance = standPos != null
+                ? companion.position().distanceTo(Vec3.atCenterOf(standPos))
+                : blockDistance;
 
-        if (distance > 4.0) {
-            // Too far, pathfind to it
+        if (standPos != null && standDistance > 1.75) {
+            if (companion.getNavigation().isDone() || ticksAtCurrentBlock % 20 == 0) {
+                companion.getNavigation().moveTo(
+                    standPos.getX() + 0.5,
+                    standPos.getY(),
+                    standPos.getZ() + 0.5,
+                    1.0
+                );
+            }
+            ticksAtCurrentBlock = 0;
+        } else if (blockDistance > 4.0) {
+            // Fallback when we do not have a good standing position yet.
             if (companion.getNavigation().isDone()) {
                 companion.getNavigation().moveTo(
                     currentTarget.getX() + 0.5,
@@ -396,15 +436,6 @@ public class MiningTask {
                 );
             }
             ticksAtCurrentBlock = 0;
-        } else if (distance > 2.5) {
-            // Getting close, keep moving
-            companion.getNavigation().moveTo(
-                currentTarget.getX() + 0.5,
-                currentTarget.getY(),
-                currentTarget.getZ() + 0.5,
-                0.8
-            );
-            ticksAtCurrentBlock++;
         } else {
             // In range, mine the block
             companion.getNavigation().stop();
@@ -419,19 +450,28 @@ public class MiningTask {
 
             // Swing arm for visual feedback
             if (ticksAtCurrentBlock % 5 == 0) {
-                companion.swing(companion.getUsedItemHand());
+                companion.swing(InteractionHand.MAIN_HAND, true);
             }
 
             // Calculate mining time based on block hardness and tool
             BlockState state = companion.level().getBlockState(currentTarget);
             int miningTime = calculateMiningTime(state);
 
+            updateBreakAnimation(currentTarget, miningProgress, miningTime);
             miningProgress++;
 
             if (miningProgress >= miningTime) {
-                // Break the block
-                breakBlock(currentTarget);
-                minedCount++;
+                // Break the block and immediately try to secure the drops.
+                boolean brokeBlock = breakBlock(currentTarget);
+                clearBreakAnimation();
+                if (brokeBlock) {
+                    minedCount++;
+                    pickupNearbyItems();
+                    collectedCount = Math.max(0, recountCollectedItems() - initialMatchingInventoryCount);
+                } else {
+                    LLMoblings.LOGGER.warn("[{}] Mining task failed to remove block at {} ({})",
+                        companion.getCompanionName(), currentTarget, state.getBlock());
+                }
                 currentTarget = null;
                 miningProgress = 0;
 
@@ -446,6 +486,7 @@ public class MiningTask {
         // Timeout if stuck at one block too long
         if (ticksAtCurrentBlock > 300) { // 15 seconds
             LLMoblings.LOGGER.debug("Mining timeout, skipping block at {}", currentTarget);
+            clearBreakAnimation();
             currentTarget = null;
             miningProgress = 0;
             ticksAtCurrentBlock = 0;
@@ -464,10 +505,13 @@ public class MiningTask {
             List<BlockPos> tree = UltimineHelper.findTree(companion.level(), start);
             if (tree.size() > 1) {
                 isTreeFelling = true;
-                // Skip the first one (it's our current target)
+                // Skip the first one (it's our current target). For wood gathering we
+                // only queue log/wood/stem blocks, not leaves.
                 for (int i = 1; i < tree.size() && miningQueue.size() < 64; i++) {
                     BlockPos pos = tree.get(i);
-                    if (isSafeToMine(pos)) {
+                    String queuedId = BuiltInRegistries.BLOCK.getKey(companion.level().getBlockState(pos).getBlock()).getPath();
+                    boolean isWoodPiece = queuedId.endsWith("_log") || queuedId.endsWith("_wood") || queuedId.endsWith("_stem") || queuedId.endsWith("_hyphae");
+                    if (isWoodPiece && isSafeToMine(pos)) {
                         miningQueue.add(pos);
                     }
                 }
@@ -575,27 +619,30 @@ public class MiningTask {
     private boolean isValidTarget(BlockPos pos) {
         BlockState state = companion.level().getBlockState(pos);
 
-        // Direct match
-        if (targetBlocks.contains(state.getBlock())) {
+        // Direct match, but only keep it if the block still makes sense for the
+        // requested resource.
+        if (targetBlocks.contains(state.getBlock()) && wouldYieldRequestedItem(pos, state)) {
             return true;
         }
 
-        // During tree felling, also accept leaves
+        // During tree felling, keep the task focused on actual wood blocks.
         if (isTreeFelling) {
             String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
-            if (blockId.contains("log") || blockId.contains("leaves") || blockId.contains("wood")) {
+            if ((blockId.endsWith("_log") || blockId.endsWith("_wood") || blockId.endsWith("_stem") || blockId.endsWith("_hyphae"))
+                    && wouldYieldRequestedItem(pos, state)) {
                 return true;
             }
         }
 
-        // During vein mining, accept deepslate variants
+        // During vein mining, accept deepslate variants if they still correspond to
+        // the requested ore/item.
         if (isVeinMining) {
             String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
             for (Block target : targetBlocks) {
                 String targetId = BuiltInRegistries.BLOCK.getKey(target).getPath();
                 String normalizedTarget = targetId.replace("deepslate_", "");
                 String normalizedBlock = blockId.replace("deepslate_", "");
-                if (normalizedTarget.equals(normalizedBlock)) {
+                if (normalizedTarget.equals(normalizedBlock) && wouldYieldRequestedItem(pos, state)) {
                     return true;
                 }
             }
@@ -611,6 +658,13 @@ public class MiningTask {
 
         // Limit search radius to loaded chunks (32 blocks from center)
         int effectiveRadius = Math.min(searchRadius, ChunkLoadingManager.getWorkingRadius());
+
+        if (isWoodRequest()) {
+            BlockPos visibleLog = findNearestVisibleLog(companionPos, effectiveRadius);
+            if (visibleLog != null) {
+                return visibleLog;
+            }
+        }
 
         // Search in expanding shells for efficiency
         for (int radius = 1; radius <= effectiveRadius; radius++) {
@@ -631,7 +685,7 @@ public class MiningTask {
 
                         BlockState state = companion.level().getBlockState(checkPos);
 
-                        if (targetBlocks.contains(state.getBlock())) {
+                        if (targetBlocks.contains(state.getBlock()) && wouldYieldRequestedItem(checkPos, state)) {
                             double dist = companionPos.distSqr(checkPos);
                             if (dist < nearestDist) {
                                 // Check if safe to mine and reachable
@@ -654,17 +708,120 @@ public class MiningTask {
         return nearest;
     }
 
+    private BlockPos findNearestVisibleLog(BlockPos companionPos, int effectiveRadius) {
+        BlockPos nearest = null;
+        double nearestDist = Double.MAX_VALUE;
+
+        for (int x = -effectiveRadius; x <= effectiveRadius; x++) {
+            for (int z = -effectiveRadius; z <= effectiveRadius; z++) {
+                for (int y = -3; y <= 20; y++) {
+                    BlockPos checkPos = companionPos.offset(x, y, z);
+                    if (!ChunkLoadingManager.isBlockInLoadedChunks(companion, checkPos)) {
+                        continue;
+                    }
+                    BlockState state = companion.level().getBlockState(checkPos);
+                    String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+                    if (!(blockId.endsWith("_log") || blockId.endsWith("_wood") || blockId.endsWith("_stem"))) {
+                        continue;
+                    }
+                    if (!isSafeToMine(checkPos) || !isReachable(checkPos)) {
+                        continue;
+                    }
+                    // Prefer outdoor or forest logs.
+                    if (!companion.level().canSeeSky(checkPos.above()) && !companion.level().canSeeSky(checkPos)) {
+                        continue;
+                    }
+                    double dist = companionPos.distSqr(checkPos);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearest = checkPos;
+                    }
+                }
+            }
+        }
+
+        return nearest;
+    }
+
     private boolean isReachable(BlockPos pos) {
-        // Check if there's an air block adjacent that the companion could stand near
-        for (BlockPos adjacent : new BlockPos[]{
-            pos.above(), pos.below(), pos.north(), pos.south(), pos.east(), pos.west()
-        }) {
-            BlockState state = companion.level().getBlockState(adjacent);
-            if (!state.isSolid() || state.isAir()) {
+        return findBestStandPosition(pos) != null;
+    }
+
+    private BlockPos findBestStandPosition(BlockPos target) {
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+
+        for (BlockPos candidate : getStandPositionCandidates(target)) {
+            if (!canStandAt(candidate)) {
+                continue;
+            }
+            double dist = companion.position().distanceTo(Vec3.atCenterOf(candidate));
+            if (dist < bestDistance) {
+                bestDistance = dist;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private List<BlockPos> getStandPositionCandidates(BlockPos target) {
+        List<BlockPos> candidates = new ArrayList<>();
+        for (BlockPos adjacent : new BlockPos[]{target.north(), target.south(), target.east(), target.west()}) {
+            candidates.add(adjacent);
+            candidates.add(adjacent.above());
+        }
+        candidates.add(companion.blockPosition());
+        return candidates;
+    }
+
+    private boolean canStandAt(BlockPos feetPos) {
+        BlockState feet = companion.level().getBlockState(feetPos);
+        BlockState head = companion.level().getBlockState(feetPos.above());
+        BlockState ground = companion.level().getBlockState(feetPos.below());
+        return (!feet.isSolid() || feet.isAir()) && (!head.isSolid() || head.isAir()) && ground.isSolid();
+    }
+
+    private boolean wouldYieldRequestedItem(BlockPos pos, BlockState state) {
+        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+
+        if (isWoodRequest()) {
+            return blockId.endsWith("_log") || blockId.endsWith("_wood") || blockId.endsWith("_stem") || blockId.endsWith("_hyphae");
+        }
+
+        if (targetBlockName.equals("dirt")) {
+            return blockId.equals("dirt") || blockId.equals("grass_block") || blockId.equals("coarse_dirt")
+                    || blockId.equals("rooted_dirt") || blockId.equals("dirt_path") || blockId.equals("podzol")
+                    || blockId.equals("mycelium");
+        }
+
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return targetBlocks.contains(state.getBlock());
+        }
+
+        ItemStack tool = companion.getMainHandItem().copy();
+        List<ItemStack> drops = Block.getDrops(state, serverLevel, pos, null, companion, tool);
+        for (ItemStack drop : drops) {
+            if (countMatchingItems(drop) > 0) {
                 return true;
             }
         }
+
+        // Fallback to block identity for things like ores that may still be worth mining
+        // even when the current tool simulation is imperfect.
+        if (targetBlocks.contains(state.getBlock())) {
+            return true;
+        }
+
         return false;
+    }
+
+    private int recountCollectedItems() {
+        int total = 0;
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            total += countMatchingItems(companion.getItem(i));
+        }
+        return total;
     }
 
     private int calculateMiningTime(BlockState state) {
@@ -686,31 +843,96 @@ public class MiningTask {
         return Math.max(5, baseTime);
     }
 
-    private void breakBlock(BlockPos pos) {
+    private boolean breakBlock(BlockPos pos) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+
+        BlockState state = serverLevel.getBlockState(pos);
+        if (state.isAir()) {
+            return false;
+        }
+
+        BlockEntity blockEntity = serverLevel.getBlockEntity(pos);
+        ItemStack tool = companion.getMainHandItem().copy();
+        List<ItemStack> drops = Block.getDrops(state, serverLevel, pos, blockEntity, companion, tool);
+
+        // Visual and audio feedback first.
+        serverLevel.levelEvent(2001, pos, Block.getId(state));
+
+        boolean removed = serverLevel.destroyBlock(pos, false, companion);
+        BlockState afterState = serverLevel.getBlockState(pos);
+
+        if (!afterState.isAir()) {
+            removed = serverLevel.removeBlock(pos, false) || removed;
+            afterState = serverLevel.getBlockState(pos);
+        }
+
+        if (!afterState.isAir()) {
+            removed = serverLevel.setBlock(pos, Blocks.AIR.defaultBlockState(), 11) || removed;
+            afterState = serverLevel.getBlockState(pos);
+        }
+
+        if (!afterState.isAir()) {
+            LLMoblings.LOGGER.warn("[{}] Failed to remove block {} at {} while mining; state after attempts is {}",
+                    companion.getCompanionName(), state.getBlock(), pos, afterState.getBlock());
+            return false;
+        }
+
+        serverLevel.sendBlockUpdated(pos, state, Blocks.AIR.defaultBlockState(), 3);
+        serverLevel.gameEvent(GameEvent.BLOCK_DESTROY, pos, GameEvent.Context.of(companion, state));
+
+        for (ItemStack drop : drops) {
+            ItemStack toInsert = drop.copy();
+            int originalCount = toInsert.getCount();
+            ItemStack remaining = companion.addToInventory(toInsert);
+            int inserted = originalCount - remaining.getCount();
+            if (inserted > 0) {
+                collectedCount += countMatchingItems(drop.copyWithCount(inserted));
+            }
+            if (!remaining.isEmpty()) {
+                ItemEntity itemEntity = new ItemEntity(
+                    serverLevel,
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    remaining
+                );
+                itemEntity.setNoPickUpDelay();
+                serverLevel.addFreshEntity(itemEntity);
+            }
+        }
+
+        LLMoblings.LOGGER.debug("[{}] Companion mined {} at {}",
+                companion.getCompanionName(), state.getBlock(), pos);
+        return true;
+    }
+
+    private void updateBreakAnimation(BlockPos target, int currentProgress, int miningTime) {
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
             return;
         }
 
-        BlockState state = serverLevel.getBlockState(pos);
-
-        // Get drops
-        List<ItemStack> drops = Block.getDrops(state, serverLevel, pos, null, companion, ItemStack.EMPTY);
-
-        // Spawn drops
-        for (ItemStack drop : drops) {
-            ItemEntity itemEntity = new ItemEntity(
-                serverLevel,
-                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                drop
-            );
-            itemEntity.setDefaultPickUpDelay();
-            serverLevel.addFreshEntity(itemEntity);
+        if (target == null) {
+            clearBreakAnimation();
+            return;
         }
 
-        // Remove the block
-        serverLevel.destroyBlock(pos, false, companion);
+        if (animatedBreakTarget != null && !animatedBreakTarget.equals(target)) {
+            serverLevel.destroyBlockProgress(companion.getId(), animatedBreakTarget, -1);
+        }
 
-        LLMoblings.LOGGER.debug("Companion mined {} at {}", state.getBlock(), pos);
+        int stage = Math.max(0, Math.min(9, (currentProgress * 10) / Math.max(1, miningTime)));
+        serverLevel.destroyBlockProgress(companion.getId(), target, stage);
+        animatedBreakTarget = target;
+    }
+
+    private void clearBreakAnimation() {
+        if (animatedBreakTarget == null) {
+            return;
+        }
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            serverLevel.destroyBlockProgress(companion.getId(), animatedBreakTarget, -1);
+        }
+        animatedBreakTarget = null;
     }
 
     private void pickupNearbyItems() {
@@ -718,19 +940,63 @@ public class MiningTask {
         List<ItemEntity> items = companion.level().getEntitiesOfClass(ItemEntity.class, pickupBox);
 
         for (ItemEntity item : items) {
-            if (item.isAlive() && !item.hasPickUpDelay()) {
-                ItemStack stack = item.getItem();
+            if (!item.isAlive()) {
+                continue;
+            }
 
-                // Try to add to companion inventory
-                ItemStack remaining = companion.addToInventory(stack);
+            ItemStack stack = item.getItem();
+            int originalCount = stack.getCount();
 
-                if (remaining.isEmpty()) {
-                    item.discard();
-                } else {
-                    item.setItem(remaining);
-                }
+            // Try to add to companion inventory. We intentionally do not wait for the
+            // vanilla pickup delay here because this task is responsible for finishing
+            // the gather/mining action reliably.
+            ItemStack remaining = companion.addToInventory(stack.copy());
+            int inserted = originalCount - remaining.getCount();
+            if (inserted > 0) {
+                collectedCount += countMatchingItems(stack.copyWithCount(inserted));
+            }
+
+            if (remaining.isEmpty()) {
+                item.discard();
+            } else {
+                item.setItem(remaining);
             }
         }
+    }
+
+    private int countMatchingItems(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return 0;
+        }
+
+        String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+
+        if (isWoodRequest()) {
+            if (itemId.endsWith("_log") || itemId.endsWith("_wood") || itemId.endsWith("_stem") || itemId.endsWith("_hyphae")) {
+                return stack.getCount();
+            }
+            return 0;
+        }
+
+        return switch (targetBlockName) {
+            case "stone" -> itemId.equals("stone") || itemId.equals("cobblestone") ? stack.getCount() : 0;
+            case "dirt" -> itemId.equals("dirt") || itemId.equals("grass_block") || itemId.equals("coarse_dirt")
+                    || itemId.equals("rooted_dirt") || itemId.equals("podzol") || itemId.equals("mycelium") ? stack.getCount() : 0;
+            case "coal" -> itemId.equals("coal") ? stack.getCount() : 0;
+            case "iron" -> itemId.equals("raw_iron") || itemId.equals("iron_ore") || itemId.equals("deepslate_iron_ore") ? stack.getCount() : 0;
+            case "gold" -> itemId.equals("raw_gold") || itemId.equals("gold_ore") || itemId.equals("deepslate_gold_ore") ? stack.getCount() : 0;
+            case "diamond" -> itemId.equals("diamond") || itemId.equals("diamond_ore") || itemId.equals("deepslate_diamond_ore") ? stack.getCount() : 0;
+            case "copper" -> itemId.equals("raw_copper") || itemId.equals("copper_ore") || itemId.equals("deepslate_copper_ore") ? stack.getCount() : 0;
+            default -> {
+                for (Block block : targetBlocks) {
+                    String blockId = BuiltInRegistries.BLOCK.getKey(block).getPath();
+                    if (itemId.equals(blockId) || itemId.contains(targetBlockName) || targetBlockName.contains(itemId)) {
+                        yield stack.getCount();
+                    }
+                }
+                yield 0;
+            }
+        };
     }
 
     public boolean isCompleted() {
@@ -746,6 +1012,10 @@ public class MiningTask {
     }
 
     public int getMinedCount() {
+        return collectedCount;
+    }
+
+    public int getBrokenBlockCount() {
         return minedCount;
     }
 

@@ -56,6 +56,7 @@ public class AutonomousTask {
     private int storedFoodCount = 0;
     private boolean storageHasWeapon = false;
     private boolean storageHasArmor = false;
+    private FarmingTask farmingTask = null;
 
     // Behavior pacing / anti-loop protection
     private int totalTicks = 0;
@@ -68,6 +69,7 @@ public class AutonomousTask {
         ASSESSING,      // Scanning base, checking resources
         HUNTING,        // Hunting animals for food
         GATHERING,      // Mining/gathering resources
+        FARMING,        // Harvesting and replanting crops
         EQUIPPING,      // Equipping armor/weapons
         STORING,        // Depositing items in chests
         RETRIEVING_STORAGE, // Getting food/gear from nearby storage
@@ -92,6 +94,10 @@ public class AutonomousTask {
         this.ticksInState = 0;
     }
 
+    public void setHomePos(BlockPos homePos) {
+        this.homePos = homePos;
+    }
+
     public void tick() {
         totalTicks++;
         ticksInState++;
@@ -101,6 +107,7 @@ public class AutonomousTask {
             case ASSESSING -> tickAssessing();
             case HUNTING -> tickHunting();
             case GATHERING -> tickGathering();
+            case FARMING -> tickFarming();
             case EQUIPPING -> tickEquipping();
             case STORING -> tickStoring();
             case RETRIEVING_STORAGE -> tickRetrievingStorage();
@@ -360,6 +367,14 @@ public class AutonomousTask {
                 return;
             }
 
+            if (companion.level() instanceof ServerLevel serverLevel) {
+                WorldQueries.CropSummary crops = WorldQueries.summarizeCrops(serverLevel, companion, homePos != null ? homePos : companion.blockPosition(), Math.min(baseRadius, 24));
+                if (crops.matureCrops() > 0) {
+                    changeState(AutonomousState.FARMING);
+                    return;
+                }
+            }
+
             // Avoid assess->hunt->assess loops when no animals are available.
             if (totalTicks >= nextHuntAllowedTick) {
                 changeState(AutonomousState.HUNTING);
@@ -367,6 +382,15 @@ public class AutonomousTask {
                 changeState(AutonomousState.EXPLORING);
             }
             return;
+        }
+
+        // Priority 4: Take care of nearby mature crops before generic wandering.
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            WorldQueries.CropSummary crops = WorldQueries.summarizeCrops(serverLevel, companion, homePos != null ? homePos : companion.blockPosition(), Math.min(baseRadius, 24));
+            if (crops.matureCrops() > 0 && !WorldQueries.summarizeThreats(companion, 10).dangerous()) {
+                changeState(AutonomousState.FARMING);
+                return;
+            }
         }
 
         // Priority 4: Store excess items
@@ -1013,6 +1037,33 @@ public class AutonomousTask {
         }
     }
 
+    private void tickFarming() {
+        if (farmingTask == null) {
+            farmingTask = new FarmingTask(companion, Math.min(baseRadius, 24));
+            report("Indo cuidar da fazenda...");
+        }
+
+        farmingTask.tick();
+
+        if (farmingTask.isFailed()) {
+            report(farmingTask.getFailReason());
+            farmingTask = null;
+            changeState(AutonomousState.ASSESSING);
+            return;
+        }
+
+        if (farmingTask.isCompleted()) {
+            report("Terminei a rodada na fazenda. Colhi " + farmingTask.getHarvestedCount() + " colheitas maduras.");
+            farmingTask = null;
+            changeState(AutonomousState.ASSESSING);
+            return;
+        }
+
+        if (ticksInState % 100 == 0) {
+            report(farmingTask.getProgressReport());
+        }
+    }
+
     private void tickEquipping() {
         if (ticksInState == 1) {
             report("Equipando equipamento...");
@@ -1577,6 +1628,9 @@ public class AutonomousTask {
         LLMoblings.LOGGER.info("[{}] Autonomous state: {} -> {}", companion.getCompanionName(), currentState, newState);
         if (newState != currentState) {
             companion.getNavigation().stop();
+        }
+        if (currentState == AutonomousState.FARMING && newState != AutonomousState.FARMING) {
+            farmingTask = null;
         }
         currentState = newState;
         ticksInState = 0;

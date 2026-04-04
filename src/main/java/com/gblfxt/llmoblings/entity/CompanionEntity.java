@@ -475,38 +475,112 @@ public class CompanionEntity extends PathfinderMob implements Container {
             return;
         }
 
-        // Find food in inventory
+        eatFoodFromInventory("");
+    }
+
+    public boolean eatFoodFromInventory(String preferredItem) {
+        int preferredSlot = findFoodSlot(preferredItem);
+        if (preferredSlot >= 0) {
+            return consumeFoodFromSlot(preferredSlot);
+        }
+
+        if (preferredItem != null && !preferredItem.isBlank()) {
+            return false;
+        }
+
+        for (int i = 0; i < inventory.size(); i++) {
+            if (consumeFoodFromSlot(i)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int findFoodSlot(String preferredItem) {
+        String normalized = normalizeFoodQuery(preferredItem);
+        if (normalized.isEmpty()) {
+            return -1;
+        }
+
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.get(i);
             if (stack.isEmpty()) continue;
+            if (stack.getItem().getFoodProperties(stack, this) == null) continue;
 
-            var foodProps = stack.getItem().getFoodProperties(stack, this);
-            if (foodProps != null) {
-                // Eat the food
-                float healAmount = foodProps.nutrition() * 0.5f;  // Half nutrition as health
-                this.heal(healAmount);
-
-                // Consume one item
-                stack.shrink(1);
-                if (stack.isEmpty()) {
-                    inventory.set(i, ItemStack.EMPTY);
-                }
-
-                // Play eating sound and particles
-                this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.5f, 1.0f);
-
-                // Notify owner
-                Player owner = getOwner();
-                if (owner != null) {
-                    owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                            "[" + getCompanionName() + "] *come " + stack.getItem().getDescription().getString() + "* Recuperou " + (int) healAmount + " de vida!"
-                    ));
-                }
-
-                LLMoblings.LOGGER.debug("{} ate {} and healed {} HP", getCompanionName(), stack.getItem(), healAmount);
-                break;  // Only eat one item per check
+            String itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+            String itemDesc = stack.getItem().getDescription().getString();
+            if (matchesFoodQuery(normalized, itemId) || matchesFoodQuery(normalized, itemDesc)) {
+                return i;
             }
         }
+        return -1;
+    }
+
+    private String normalizeFoodQuery(String query) {
+        if (query == null) return "";
+        return java.text.Normalizer.normalize(query, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase()
+                .trim()
+                .replace(' ', '_');
+    }
+
+    private boolean matchesFoodQuery(String normalizedQuery, String value) {
+        String normalizedValue = normalizeFoodQuery(value);
+        if (normalizedQuery.isEmpty() || normalizedValue.isEmpty()) {
+            return false;
+        }
+        if (normalizedValue.contains(normalizedQuery) || normalizedQuery.contains(normalizedValue)) {
+            return true;
+        }
+        return (normalizedQuery.equals("carrot") && normalizedValue.contains("cenoura"))
+                || (normalizedQuery.equals("cenoura") && normalizedValue.contains("carrot"))
+                || (normalizedQuery.equals("potato") && normalizedValue.contains("batata"))
+                || (normalizedQuery.equals("batata") && normalizedValue.contains("potato"));
+    }
+
+    private boolean consumeFoodFromSlot(int slotIndex) {
+        if (slotIndex < 0 || slotIndex >= inventory.size()) {
+            return false;
+        }
+
+        ItemStack stack = inventory.get(slotIndex);
+        if (stack.isEmpty()) {
+            return false;
+        }
+
+        var foodProps = stack.getItem().getFoodProperties(stack, this);
+        if (foodProps == null) {
+            return false;
+        }
+
+        ItemStack before = stack.copy();
+        float healAmount = foodProps.nutrition() * 0.5f;
+        this.heal(healAmount);
+
+        stack.shrink(1);
+        ItemStack after = stack;
+        if (after.isEmpty()) {
+            inventory.set(slotIndex, ItemStack.EMPTY);
+            after = ItemStack.EMPTY;
+        }
+
+        if (slotIndex == selectedSlot) {
+            setItemSlot(EquipmentSlot.MAINHAND, after.copy());
+        }
+
+        this.swing(InteractionHand.MAIN_HAND, true);
+        this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.5f, 1.0f);
+
+        Player owner = getOwner();
+        if (owner != null) {
+            owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "[" + getCompanionName() + "] *come " + before.getItem().getDescription().getString() + "* Recuperou " + (int) healAmount + " de vida!"
+            ));
+        }
+
+        LLMoblings.LOGGER.debug("{} ate {} and healed {} HP", getCompanionName(), before.getItem(), healAmount);
+        return true;
     }
 
     /**

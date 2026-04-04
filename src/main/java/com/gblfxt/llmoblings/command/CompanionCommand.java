@@ -217,6 +217,7 @@ public class CompanionCommand {
                         case FOLLOWING -> "SEGUINDO";
                         case GOING_TO -> "INDO";
                         case MINING -> "MINERANDO";
+                        case FARMING -> "FAZENDO FARM";
                         case ATTACKING -> "ATACANDO";
                         case DEFENDING -> "DEFENDENDO";
                         case AUTONOMOUS -> "AUTÔNOMO";
