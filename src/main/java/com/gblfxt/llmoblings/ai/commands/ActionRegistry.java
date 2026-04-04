@@ -32,7 +32,7 @@ public final class ActionRegistry {
     private static final String COMB = "COMBATE";
     private static final String REC = "RECURSOS";
     private static final String INV = "INVENTÁRIO";
-    private static final String EQP = "EQUIPAMENTO";
+    private static final String ME = "REDE ME"; // ME NETWORK
     private static final String UTI = "UTILIDADES";
     private static final String HOME = "CASA";
     private static final String TP = "TELEPORTE";
@@ -63,10 +63,10 @@ public final class ActionRegistry {
         doc(INV, "{\"action\": \"inventory\"}", "Relatar o conteúdo do inventário"),
         doc(INV, "{\"action\": \"give\", \"item\": \"diamond\", \"count\": X}", "Entregar itens ao jogador"),
 
-        doc(EQP, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME (cria se necessário)"),
-        doc(EQP, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME"),
-        doc(EQP, "{\"action\": \"deposit\"}", "Depositar todos os itens na rede ME ou em um baú próximo, mantendo o equipamento"),
-        doc(EQP, "{\"action\": \"deposit\", \"keepGear\": false}", "Depositar tudo, inclusive armas e armaduras"),
+        doc(ME, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME (cria se necessário)"),
+        doc(ME, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME"),
+        doc(ME, "{\"action\": \"deposit\"}", "Depositar todos os itens na rede ME ou em um baú próximo, mantendo o equipamento"),
+        doc(ME, "{\"action\": \"deposit\", \"keepGear\": false}", "Depositar tudo, inclusive armas e armaduras"),
 
         doc(UTI, "{\"action\": \"status\"}", "Relatar vida, fome e inventário"),
         doc(UTI, "{\"action\": \"scan\", \"radius\": X}", "Escanear recursos e mobs em um raio"),
