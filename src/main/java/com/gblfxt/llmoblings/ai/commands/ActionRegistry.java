@@ -41,11 +41,12 @@ public final class ActionRegistry {
     private static final String GADGET = "BUILDING GADGETS";
     private static final String BACKPACK = "SOPHISTICATED BACKPACKS";
 
+    // Exemplos necessários para o bot saber o que ele pode fazer caso nenhum comando seja resolvido no código
     private static ActionDoc doc(String categoria, String json, String descricao) {
         return new ActionDoc(categoria, json, descricao);
     }
 
-    private static final List<ActionDoc> ACTIONS = List.of(
+        private static final List<ActionDoc> ACTIONS = List.of(
         doc(MOV, "{\"action\": \"follow\"}", "Seguir o jogador"),
         doc(MOV, "{\"action\": \"stay\"}", "Parar e ficar no lugar"),
         doc(MOV, "{\"action\": \"goto\", \"x\": X, \"y\": Y, \"z\": Z}", "Ir para coordenadas específicas"),
@@ -62,6 +63,8 @@ public final class ActionRegistry {
         doc(INV, "{\"action\": \"equip\"}", "Equipar a melhor arma do inventário"),
         doc(INV, "{\"action\": \"inventory\"}", "Relatar o conteúdo do inventário"),
         doc(INV, "{\"action\": \"give\", \"item\": \"diamond\", \"count\": X}", "Entregar itens ao jogador"),
+        doc(INV, "{\"action\": \"takefromchest\", \"item\": \"carrot\", \"count\": 1}", "Retirar um item específico de um baú próximo ou do baú indicado pelo jogador"),
+        doc(INV, "{\"action\": \"takefromchest\", \"item\": \"iron\", \"count\": X}", "Pegar uma quantidade específica de um item de um baú"),
 
         doc(ME, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME (cria se necessário)"),
         doc(ME, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME"),
@@ -188,10 +191,17 @@ public final class ActionRegistry {
             return null;
         }
 
-        // Não tentar adivinhar continuação vaga ou comandos que citam armazenamento.
-        if (
-            containsStorageWord(normalized) || isExplicitlyAmbiguous(normalized)
-        ) {
+        if (isExplicitlyAmbiguous(normalized)) {
+            return null;
+        }
+
+        CompanionAction storageAction = tryResolveStorageCommand(companion, sender, normalized);
+        if (storageAction != null) {
+            return storageAction;
+        }
+
+        // Não tentar adivinhar continuação vaga para frases restantes que citam armazenamento.
+        if (containsStorageWord(normalized)) {
             return null;
         }
 
@@ -240,6 +250,65 @@ public final class ActionRegistry {
         }
 
         return tryResolveGatherCommand(normalized);
+    }
+
+
+    private static @Nullable CompanionAction tryResolveStorageCommand(
+        CompanionEntity companion,
+        @Nullable Player sender,
+        String normalized
+    ) {
+        if (!containsStorageWord(normalized)) {
+            return null;
+        }
+
+        boolean wantsTake = containsAny(normalized,
+            "pega", "pegue", "tirar", "tira", "retira", "retire", "busca", "buscar", "get", "take", "retrieve", "grab"
+        );
+        boolean wantsDeposit = containsAny(normalized,
+            "guarda", "guardar", "deposita", "deposita", "coloca", "colocar", "stash", "store", "put"
+        );
+
+        if (!wantsTake && !wantsDeposit) {
+            return null;
+        }
+
+        if (wantsTake) {
+            String resource = extractResource(normalized);
+            if (resource == null || resource.isBlank()) {
+                return null;
+            }
+            JsonObject data = new JsonObject();
+            data.addProperty("item", resource);
+            data.addProperty("count", extractCount(normalized));
+            BlockPos ref = sender != null ? sender.blockPosition() : companion.blockPosition();
+            data.addProperty("x", ref.getX());
+            data.addProperty("y", ref.getY());
+            data.addProperty("z", ref.getZ());
+            data.addProperty("preferSenderChest", containsAny(normalized, "esse bau", "esse baú", "desse bau", "desse baú", "daqui", "aqui", "deste bau", "deste baú"));
+            return new CompanionAction("takefromchest", null, data);
+        }
+
+        JsonObject data = new JsonObject();
+        data.addProperty("keepGear", !containsAny(normalized, "tudo", "inclusive armadura", "inclusive arma"));
+        return new CompanionAction("deposit", null, data);
+    }
+
+    private static int extractCount(String normalized) {
+        Matcher matcher = COUNT_PATTERN.matcher(normalized);
+        if (matcher.find()) {
+            return Integer.parseInt(matcher.group(1));
+        }
+        return 16;
+    }
+
+    private static @Nullable String extractResource(String normalized) {
+        for (Map.Entry<String, String> entry : RESOURCE_ALIASES.entrySet()) {
+            if (normalized.contains(entry.getKey())) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     private static @Nullable CompanionAction tryResolveHomeCommand(

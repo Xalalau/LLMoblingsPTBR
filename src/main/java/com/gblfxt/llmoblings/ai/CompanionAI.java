@@ -531,9 +531,20 @@ public class CompanionAI {
                 String item = action.getString("item", "");
                 boolean ate = companion.eatFoodFromInventory(item);
                 if (ate) {
+                    currentState = AIState.IDLE;
                     return ActionResult.terminal("eat", item.isBlank() ? "Comi alguma coisa" : "Comi " + item);
                 }
                 return ActionResult.failure("eat", item.isBlank() ? "Nao encontrei comida no inventario" : "Nao encontrei " + item + " para comer");
+            }
+            case "takefromchest" -> {
+                String item = action.getString("item", "");
+                int count = action.getInt("count", 1);
+                int x = action.getInt("x", (int) companion.getX());
+                int y = action.getInt("y", (int) companion.getY());
+                int z = action.getInt("z", (int) companion.getZ());
+                boolean preferSenderChest = action.getBoolean("preferSenderChest", false);
+                retrieveItemsFromChest(item, count, new BlockPos(x, y, z), preferSenderChest);
+                return ActionResult.terminal("takefromchest", "Vou pegar " + item + " do baú");
             }
             case "explore", "wander", "look around" -> {
                 int radius = action.getInt("radius", 32);
@@ -694,6 +705,13 @@ public class CompanionAI {
                 DepositRequest req = pendingDepositRequest;
                 pendingDepositRequest = null;
                 executeDeposit(serverLevel, req.pos(), req.isME(), req.keepGear());
+                targetPos = null;
+                return;
+            }
+
+            if (pendingChestRetrievalRequest != null && companion.level() instanceof ServerLevel serverLevel) {
+                ChestRetrievalRequest req = pendingChestRetrievalRequest;
+                executeChestRetrieval(serverLevel, req);
                 targetPos = null;
                 return;
             }
@@ -2221,8 +2239,10 @@ public class CompanionAI {
     }
 
     private DepositRequest pendingDepositRequest = null;
+    private ChestRetrievalRequest pendingChestRetrievalRequest = null;
 
     private record DepositRequest(BlockPos pos, boolean isME, boolean keepGear) {}
+    private record ChestRetrievalRequest(BlockPos pos, String itemName, int count) {}
 
     private BlockPos findNearbyChest(ServerLevel level, int radius) {
         BlockPos center = companion.blockPosition();
@@ -2439,6 +2459,116 @@ public class CompanionAI {
 
         container.setChanged();
         return deposited;
+    }
+
+
+    private void retrieveItemsFromChest(String itemName, int count, BlockPos referencePos, boolean preferReferenceChest) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            sendMessage("Tem algo errado com o mundo...");
+            return;
+        }
+        if (itemName == null || itemName.isBlank()) {
+            sendMessage("Qual item eu devo pegar do baú?");
+            return;
+        }
+
+        BlockPos chest = findChestWithItem(serverLevel, referencePos, itemName, preferReferenceChest ? 6 : 16, preferReferenceChest);
+        if (chest == null && preferReferenceChest) {
+            chest = findChestWithItem(serverLevel, companion.blockPosition(), itemName, 16, false);
+        }
+        if (chest == null) {
+            sendMessage("Não encontrei " + itemName + " em nenhum baú próximo.");
+            return;
+        }
+
+        pendingChestRetrievalRequest = new ChestRetrievalRequest(chest, itemName, Math.max(1, count));
+        currentState = AIState.GOING_TO;
+        targetPos = chest;
+        companion.getNavigation().moveTo(chest.getX() + 0.5, chest.getY(), chest.getZ() + 0.5, 1.0);
+
+        if (companion.position().distanceTo(Vec3.atCenterOf(chest)) < 3.0) {
+            executeChestRetrieval(serverLevel, pendingChestRetrievalRequest);
+        } else {
+            sendMessage("Achei um baú com " + itemName + ". Indo pegar.");
+        }
+    }
+
+    private BlockPos findChestWithItem(ServerLevel level, BlockPos center, String itemName, int radius, boolean sortByDistance) {
+        java.util.List<BlockPos> matches = new java.util.ArrayList<>();
+        for (int x = -radius; x <= radius; x++) {
+            for (int y = -3; y <= 3; y++) {
+                for (int z = -radius; z <= radius; z++) {
+                    BlockPos pos = center.offset(x, y, z);
+                    var be = level.getBlockEntity(pos);
+                    if (!(be instanceof net.minecraft.world.Container container)) {
+                        continue;
+                    }
+                    if (containerHasItem(container, itemName)) {
+                        matches.add(pos);
+                    }
+                }
+            }
+        }
+        if (matches.isEmpty()) return null;
+        matches.sort(java.util.Comparator.comparingDouble(pos -> pos.distSqr(center)));
+        return matches.get(0);
+    }
+
+    private boolean containerHasItem(net.minecraft.world.Container container, String itemName) {
+        String searchName = normalizeCommandText(itemName).replace(' ', '_');
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack stack = container.getItem(i);
+            if (stack.isEmpty()) continue;
+            String stackId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
+            String stackName = normalizeCommandText(stack.getItem().getDescription().getString()).replace(' ', '_');
+            if (stackId.contains(searchName) || stackName.contains(searchName) || searchName.contains(stackId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void executeChestRetrieval(ServerLevel level, ChestRetrievalRequest request) {
+        int retrieved = retrieveFromChest(level, request.pos(), request.itemName(), request.count());
+        if (retrieved > 0) {
+            sendMessage("Peguei " + retrieved + " de " + request.itemName() + " do baú.");
+        } else {
+            sendMessage("Cheguei no baú, mas não consegui pegar " + request.itemName() + ".");
+        }
+        pendingChestRetrievalRequest = null;
+        currentState = AIState.IDLE;
+    }
+
+    private int retrieveFromChest(ServerLevel level, BlockPos chestPos, String itemName, int count) {
+        var be = level.getBlockEntity(chestPos);
+        if (!(be instanceof net.minecraft.world.level.block.entity.BaseContainerBlockEntity container)) {
+            return 0;
+        }
+        String searchName = normalizeCommandText(itemName).replace(' ', '_');
+        int retrieved = 0;
+        for (int i = 0; i < container.getContainerSize() && retrieved < count; i++) {
+            ItemStack stack = container.getItem(i);
+            if (stack.isEmpty()) continue;
+            String stackId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
+            String stackName = normalizeCommandText(stack.getItem().getDescription().getString()).replace(' ', '_');
+            if (!(stackId.contains(searchName) || stackName.contains(searchName) || searchName.contains(stackId))) {
+                continue;
+            }
+            int toMove = Math.min(count - retrieved, stack.getCount());
+            ItemStack moved = stack.copy();
+            moved.setCount(toMove);
+            ItemStack remaining = companion.addToInventory(moved);
+            int movedCount = toMove - remaining.getCount();
+            if (movedCount > 0) {
+                stack.shrink(movedCount);
+                retrieved += movedCount;
+                if (stack.isEmpty()) {
+                    container.setItem(i, ItemStack.EMPTY);
+                }
+            }
+        }
+        container.setChanged();
+        return retrieved;
     }
 
     private void requestTeleport(String targetPlayer) {
