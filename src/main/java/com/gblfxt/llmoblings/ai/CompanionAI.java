@@ -19,37 +19,43 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.BedBlock;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.SwordItem;
 import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ArmorItem;
-import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.Container;
 
 import java.text.Normalizer;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.function.Predicate;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
+import org.jetbrains.annotations.Nullable;
 
 public class CompanionAI {
     private final CompanionEntity companion;
     private final OllamaClient ollamaClient;
     private final CompanionPersonality personality;
+    private final MovementRecoveryController movementRecovery;
 
     // Current state
     private AIState currentState = AIState.IDLE;
@@ -58,6 +64,7 @@ public class CompanionAI {
 
     // Task-specific data
     private BlockPos targetPos = null;
+    private BlockPos pendingSleepBedPos = null;
     private Entity targetEntity = null;
     private MiningTask miningTask = null;
     private FarmingTask farmingTask = null;
@@ -83,16 +90,12 @@ public class CompanionAI {
     private CompanionAction lastExplicitCommand = null;
     private int lastExplicitCommandTick = 0;
 
-    // Recovery for navigation failures, pits and simple vertical traps.
-    private Vec3 lastMovementSamplePos = null;
-    private int movementStuckTicks = 0;
-    private int nextMovementRecoveryTick = 0;
-    private int lastRecoveryMessageTick = -200;
 
     public CompanionAI(CompanionEntity companion) {
         this.companion = companion;
         this.ollamaClient = new OllamaClient(companion.getCompanionName());
         this.personality = new CompanionPersonality(companion);
+        this.movementRecovery = new MovementRecoveryController(companion, this::sendMessage);
     }
 
     public void tick() {
@@ -461,6 +464,10 @@ public class CompanionAI {
         String actionName = action.getAction().toLowerCase();
         LLMoblings.LOGGER.debug("Executing action: {}", action);
 
+        if (!"sleep".equals(actionName)) {
+            wakeUpForAction(actionName);
+        }
+
         switch (actionName) {
             // --- Query actions (loop continues) ---
             case "status" -> {
@@ -505,6 +512,10 @@ public class CompanionAI {
             case "come" -> {
                 comeToOwner();
                 return ActionResult.terminal("come", "Indo até meu dono");
+            }
+            case "jump" -> {
+                doJumpCommand();
+                return ActionResult.terminal("jump", "Pulei");
             }
             case "mine", "gather" -> {
                 String block = action.getString("block", action.getString("item", "stone"));
@@ -616,18 +627,31 @@ public class CompanionAI {
                 return ActionResult.terminal("elevator", "Elevador " + direction);
             }
             case "equip", "gear", "arm" -> {
-                equipBestGear();
-                return ActionResult.terminal("equip", "Equipei meu melhor equipamento");
+                String material = action.getString("material", "any");
+                String gearType = action.getString("gearType", "any");
+                String slotName = action.getString("slot", "");
+                String match = action.getString("match", "");
+                equipRequestedGear(material, gearType, slotName, match);
+                return ActionResult.terminal("equip", "Equipando item solicitado");
             }
             case "getgear", "getarmor", "craftgear", "ironset", "meget" -> {
-                String material = action.getString("material", "iron");
-                getGearFromME(material);
-                return ActionResult.terminal("getgear", "Buscando equipamento de " + material);
+                String material = action.getString("material", "any");
+                String gearType = action.getString("gearType", "any");
+                String slotName = action.getString("slot", "");
+                String match = action.getString("match", "");
+                getRequestedGear(material, gearType, slotName, match);
+                return ActionResult.terminal("getgear", "Buscando equipamento solicitado");
             }
             case "deposit", "store", "stash", "putaway" -> {
                 boolean keepGear = action.getBoolean("keepGear", true);
                 depositItems(keepGear);
                 return ActionResult.terminal("deposit", "Depositando itens");
+            }
+            case "deposititem", "putinchest", "storeitem" -> {
+                String item = action.getString("item", "");
+                int count = action.getInt("count", 1);
+                depositSpecificItems(item, count);
+                return ActionResult.terminal("deposititem", "Guardando item específico");
             }
             case "build" -> {
                 String structure = action.getString("structure", "cottage");
@@ -671,7 +695,7 @@ public class CompanionAI {
         // Follow whoever gave the command, or owner if no one specified
         Player followTarget = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
         if (followTarget == null) {
-            resetMovementRecovery();
+            movementRecovery.reset();
             currentState = AIState.IDLE;
             return;
         }
@@ -679,34 +703,49 @@ public class CompanionAI {
         double distance = companion.distanceTo(followTarget);
         double followDist = Config.COMPANION_FOLLOW_DISTANCE.get();
 
-        if (distance > followDist) {
-            // Move towards target
-            companion.getNavigation().moveTo(followTarget, 1.0);
-        } else if (distance < followDist - 1) {
-            // Close enough, stop
-            companion.getNavigation().stop();
+        if (movementRecovery.tickTowardsEntity(followTarget, true)) {
+            return;
         }
 
-        handleMovementRecovery(followTarget.position());
+        if (distance > followDist + 2) {
+            double speed = distance > followDist + 12 ? 1.5 : distance > followDist + 4 ? 1.35 : 1.15;
+            companion.getNavigation().moveTo(followTarget, speed);
+        } else if (distance < followDist - 1) {
+            companion.getNavigation().stop();
+            movementRecovery.reset();
+        }
 
-        // Teleport if too far
-        if (distance > 32) {
+        // Teleport only if extremely far away
+        if (distance > 48) {
             Vec3 targetPos = followTarget.position();
             companion.teleportTo(targetPos.x, targetPos.y, targetPos.z);
-            resetMovementRecovery();
+            movementRecovery.reset();
         }
     }
 
     private void tickGoTo() {
         if (targetPos == null) {
-            resetMovementRecovery();
+            movementRecovery.reset();
             currentState = AIState.IDLE;
             return;
         }
 
         double distance = companion.position().distanceTo(Vec3.atCenterOf(targetPos));
         if (distance < 3.0) {
-            resetMovementRecovery();
+            movementRecovery.reset();
+
+            if (pendingSleepBedPos != null) {
+                BlockPos bed = pendingSleepBedPos;
+                pendingSleepBedPos = null;
+                targetPos = null;
+                if (startSleepingOnBed(bed)) {
+                    sendMessage("*deita na cama* Boa noite!");
+                } else {
+                    sendMessage("Cheguei na cama, mas não consegui deitar corretamente.");
+                }
+                currentState = AIState.IDLE;
+                return;
+            }
 
             // Check for pending gear request first
             if (pendingGearRequest != null && companion.level() instanceof ServerLevel serverLevel) {
@@ -721,7 +760,7 @@ public class CompanionAI {
             if (pendingDepositRequest != null && companion.level() instanceof ServerLevel serverLevel) {
                 DepositRequest req = pendingDepositRequest;
                 pendingDepositRequest = null;
-                executeDeposit(serverLevel, req.pos(), req.isME(), req.keepGear());
+                executeDeposit(serverLevel, req.storagePos(), req.isME(), req.keepGear(), req.itemName(), req.count());
                 targetPos = null;
                 return;
             }
@@ -737,242 +776,18 @@ public class CompanionAI {
             currentState = AIState.IDLE;
             targetPos = null;
         } else {
+            if (movementRecovery.tickTowardsPosition(targetPos, false)) {
+                return;
+            }
             if (companion.getNavigation().isDone()) {
                 // Recalculate path
                 companion.getNavigation().moveTo(targetPos.getX(), targetPos.getY(), targetPos.getZ(), 1.0);
             }
-            handleMovementRecovery(Vec3.atCenterOf(targetPos));
         }
     }
 
     private void resetMovementRecovery() {
-        lastMovementSamplePos = companion.position();
-        movementStuckTicks = 0;
-        nextMovementRecoveryTick = 0;
-    }
-
-    private void handleMovementRecovery(Vec3 desiredPos) {
-        if (desiredPos == null) {
-            resetMovementRecovery();
-            return;
-        }
-
-        Vec3 currentPos = companion.position();
-        if (lastMovementSamplePos == null) {
-            lastMovementSamplePos = currentPos;
-            movementStuckTicks = 0;
-            return;
-        }
-
-        double moved = currentPos.distanceTo(lastMovementSamplePos);
-        boolean hasGoal = currentPos.distanceTo(desiredPos) > 2.5;
-        boolean pathing = !companion.getNavigation().isDone() || hasGoal;
-        boolean shouldWatchForStuck = pathing && (isLikelyInPit() || desiredPos.y > currentPos.y + 1.2 || companion.horizontalCollision);
-
-        if (!shouldWatchForStuck) {
-            if (moved > 0.18 || !pathing) {
-                movementStuckTicks = 0;
-                lastMovementSamplePos = currentPos;
-            }
-            return;
-        }
-
-        if (moved < 0.08) {
-            movementStuckTicks++;
-        } else {
-            movementStuckTicks = 0;
-            lastMovementSamplePos = currentPos;
-            return;
-        }
-
-        if (movementStuckTicks < 30 || companion.tickCount < nextMovementRecoveryTick) {
-            return;
-        }
-
-        if (companion.tickCount - lastRecoveryMessageTick > 80) {
-            sendMessage("Fiquei preso. Vou tentar sair daqui.");
-            lastRecoveryMessageTick = companion.tickCount;
-        }
-
-        if (tryJumpTowardNearbyLedge(desiredPos) || tryDigEscapeRoute(desiredPos) || tryPillarOutOfPit()) {
-            movementStuckTicks = 0;
-            lastMovementSamplePos = companion.position();
-            nextMovementRecoveryTick = companion.tickCount + 15;
-            return;
-        }
-
-        nextMovementRecoveryTick = companion.tickCount + 20;
-    }
-
-    private boolean isLikelyInPit() {
-        BlockPos feet = companion.blockPosition();
-        int solidSides = 0;
-        for (Direction direction : Direction.Plane.HORIZONTAL) {
-            BlockPos sidePos = feet.relative(direction);
-            BlockState sideState = companion.level().getBlockState(sidePos);
-            if (!sideState.isAir() && sideState.isFaceSturdy(companion.level(), sidePos, direction.getOpposite())) {
-                solidSides++;
-            }
-        }
-
-        boolean floorSolid = companion.level().getBlockState(feet.below()).isFaceSturdy(companion.level(), feet.below(), Direction.UP);
-        boolean headClear = companion.level().getBlockState(feet).isAir() && companion.level().getBlockState(feet.above()).isAir();
-        boolean wantsUpwardMovement = targetPos != null && targetPos.getY() > feet.getY() + 1;
-        return floorSolid && headClear && (solidSides >= 3 || (solidSides >= 2 && wantsUpwardMovement));
-    }
-
-    private boolean tryJumpTowardNearbyLedge(Vec3 desiredPos) {
-        BlockPos feet = companion.blockPosition();
-        Direction preferred = getPreferredHorizontalDirection(desiredPos);
-        Direction[] directions = orderDirections(preferred);
-
-        for (Direction direction : directions) {
-            BlockPos wallPos = feet.relative(direction);
-            BlockPos ledgeFeet = wallPos.above();
-            if (!companion.level().getBlockState(wallPos).isFaceSturdy(companion.level(), wallPos, Direction.UP)) {
-                continue;
-            }
-            if (!canStandAt(ledgeFeet)) {
-                continue;
-            }
-
-            Vec3 ledgeCenter = Vec3.atBottomCenterOf(ledgeFeet);
-            companion.getLookControl().setLookAt(ledgeCenter.x, ledgeCenter.y + 0.5, ledgeCenter.z);
-            Vec3 push = ledgeCenter.subtract(companion.position());
-            if (push.lengthSqr() > 1.0E-4) {
-                push = push.normalize().scale(0.18);
-                companion.setDeltaMovement(push.x, Math.max(companion.getDeltaMovement().y, 0.42), push.z);
-            }
-            companion.getJumpControl().jump();
-            companion.getNavigation().moveTo(ledgeCenter.x, ledgeCenter.y, ledgeCenter.z, 1.0);
-            return true;
-        }
-        return false;
-    }
-
-    private boolean tryDigEscapeRoute(Vec3 desiredPos) {
-        if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            return false;
-        }
-
-        BlockPos feet = companion.blockPosition();
-        Direction preferred = getPreferredHorizontalDirection(desiredPos);
-        Direction[] directions = orderDirections(preferred);
-
-        for (Direction direction : directions) {
-            BlockPos front = feet.relative(direction);
-            BlockPos upperFront = front.above();
-            if (tryBreakForEscape(serverLevel, front) | tryBreakForEscape(serverLevel, upperFront)) {
-                companion.swing(InteractionHand.MAIN_HAND, true);
-                companion.getNavigation().moveTo(front.getX() + 0.5, front.getY(), front.getZ() + 0.5, 1.0);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private boolean tryBreakForEscape(ServerLevel serverLevel, BlockPos pos) {
-        BlockState state = serverLevel.getBlockState(pos);
-        if (state.isAir() || state.getDestroySpeed(serverLevel, pos) < 0 || state.getFluidState().isSource()) {
-            return false;
-        }
-        if (state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN) || state.is(Blocks.CRYING_OBSIDIAN) || state.is(Blocks.REINFORCED_DEEPSLATE)) {
-            return false;
-        }
-        boolean removed = serverLevel.destroyBlock(pos, true, companion);
-        if (removed) {
-            companion.gameEvent(net.minecraft.world.level.gameevent.GameEvent.BLOCK_DESTROY);
-        }
-        return removed;
-    }
-
-    private boolean tryPillarOutOfPit() {
-        if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            return false;
-        }
-
-        BlockPos feet = companion.blockPosition();
-        BlockPos head = feet.above();
-        if (!companion.onGround() || !serverLevel.getBlockState(feet).isAir() || !serverLevel.getBlockState(head).isAir()) {
-            return false;
-        }
-
-        int slot = findDisposableBlockSlot();
-        if (slot < 0) {
-            return false;
-        }
-
-        AABB raisedBox = companion.getBoundingBox().move(0.0, 1.05, 0.0);
-        if (!serverLevel.noCollision(companion, raisedBox)) {
-            return false;
-        }
-
-        ItemStack stack = companion.getItem(slot);
-        if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
-            return false;
-        }
-
-        BlockState placeState = blockItem.getBlock().defaultBlockState();
-        companion.setPos(companion.getX(), companion.getY() + 1.01, companion.getZ());
-        if (!serverLevel.setBlockAndUpdate(feet, placeState)) {
-            companion.setPos(companion.getX(), companion.getY() - 1.01, companion.getZ());
-            return false;
-        }
-
-        stack.shrink(1);
-        if (stack.isEmpty()) {
-            companion.setItem(slot, ItemStack.EMPTY);
-        } else {
-            companion.setItem(slot, stack);
-        }
-        if (slot == companion.getSelectedSlot()) {
-            companion.setItemSlot(EquipmentSlot.MAINHAND, companion.getItem(slot).copy());
-        }
-
-        companion.swing(InteractionHand.MAIN_HAND, true);
-        companion.getNavigation().stop();
-        return true;
-    }
-
-    private int findDisposableBlockSlot() {
-        for (int slot = 0; slot < companion.getContainerSize(); slot++) {
-            ItemStack stack = companion.getItem(slot);
-            if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
-                continue;
-            }
-
-            BlockState state = blockItem.getBlock().defaultBlockState();
-            if (state.is(Blocks.DIRT) || state.is(Blocks.COARSE_DIRT) || state.is(Blocks.COBBLESTONE)
-                    || state.is(Blocks.COBBLED_DEEPSLATE) || state.is(Blocks.NETHERRACK)
-                    || state.is(Blocks.GRAVEL) || state.is(Blocks.SAND)) {
-                return slot;
-            }
-        }
-        return -1;
-    }
-
-    private boolean canStandAt(BlockPos feetPos) {
-        BlockPos below = feetPos.below();
-        BlockState floor = companion.level().getBlockState(below);
-        return floor.isFaceSturdy(companion.level(), below, Direction.UP)
-                && companion.level().getBlockState(feetPos).isAir()
-                && companion.level().getBlockState(feetPos.above()).isAir();
-    }
-
-    private Direction getPreferredHorizontalDirection(Vec3 desiredPos) {
-        Vec3 delta = desiredPos.subtract(companion.position());
-        if (Math.abs(delta.x) >= Math.abs(delta.z)) {
-            return delta.x >= 0 ? Direction.EAST : Direction.WEST;
-        }
-        return delta.z >= 0 ? Direction.SOUTH : Direction.NORTH;
-    }
-
-    private Direction[] orderDirections(Direction preferred) {
-        Direction left = preferred.getClockWise();
-        Direction right = preferred.getCounterClockWise();
-        Direction back = preferred.getOpposite();
-        return new Direction[] { preferred, left, right, back };
+        movementRecovery.reset();
     }
 
     private void tickMining() {
@@ -1023,7 +838,7 @@ public class CompanionAI {
         farmingTask.tick();
 
         if (farmingTask.isCompleted()) {
-            sendMessage("Terminei o trabalho na fazenda. Colhi " + farmingTask.getHarvestedCount() + " colheitas maduras.");
+            sendMessage("Terminei o trabalho na fazenda. Colhi " + farmingTask.getHarvestedCount() + " colheitas maduras e plantei " + farmingTask.getPlantedCount() + " espaços vazios.");
             personality.onTaskComplete();
             farmingTask = null;
             currentState = AIState.IDLE;
@@ -1117,6 +932,9 @@ public class CompanionAI {
         );
 
         if (!threats.isEmpty()) {
+            if (companion.tickCount % 20 == 0) {
+                equipBestWeaponForCombat();
+            }
             // Sort by distance and get closest
             targetEntity = threats.stream()
                     .min(Comparator.comparingDouble(e -> companion.distanceTo(e)))
@@ -1208,13 +1026,13 @@ public class CompanionAI {
 
     // Action implementations
     private void startFollowing() {
-        resetMovementRecovery();
+        movementRecovery.reset();
         currentState = AIState.FOLLOWING;
         sendMessage("Vou te seguir!");
     }
 
     private void stopAndStay() {
-        resetMovementRecovery();
+        movementRecovery.reset();
         currentState = AIState.IDLE;
         companion.getNavigation().stop();
         sendMessage("Vou ficar aqui.");
@@ -1222,9 +1040,9 @@ public class CompanionAI {
 
     private void goTo(BlockPos pos) {
         targetPos = pos;
-        resetMovementRecovery();
+        movementRecovery.reset();
         currentState = AIState.GOING_TO;
-        companion.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 1.0);
+        companion.getNavigation().moveTo(pos.getX(), pos.getY(), pos.getZ(), 1.15);
     }
 
     private void comeToOwner() {
@@ -1234,10 +1052,21 @@ public class CompanionAI {
         }
     }
 
+    private void doJumpCommand() {
+        companion.getNavigation().stop();
+        if (companion.onGround()) {
+            companion.getJumpControl().jump();
+            companion.setDeltaMovement(companion.getDeltaMovement().x, Math.max(companion.getDeltaMovement().y, 0.42), companion.getDeltaMovement().z);
+        }
+        currentState = AIState.IDLE;
+        sendMessage("Pulei.");
+    }
+
     private void startFarming(int radius) {
+        movementRecovery.reset();
         farmingTask = new FarmingTask(companion, radius);
         currentState = AIState.FARMING;
-        sendMessage("Vou cuidar da fazenda: colher o que estiver maduro, replantar e recolher os itens.");
+        sendMessage("Vou cuidar da fazenda: colher o que estiver maduro, plantar nos espaços vazios, replantar e recolher os itens.");
         personality.onTaskStart("farming");
     }
 
@@ -1336,6 +1165,7 @@ public class CompanionAI {
     }
 
     private void startDefending() {
+        equipBestWeaponForCombat();
         currentState = AIState.DEFENDING;
         sendMessage("Eu vou te proteger!");
     }
@@ -1960,58 +1790,81 @@ public class CompanionAI {
     }
 
     private void giveItems(String itemName, int count) {
-        // Give to whoever gave the command, not just owner
         Player target = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
         if (target == null) {
             sendMessage("Não vejo ninguém para quem entregar os itens!");
             return;
         }
 
-        String searchName = itemName.toLowerCase().replace(" ", "_");
+        String normalizedRequest = itemName == null ? "" : normalizeCommandText(itemName).trim();
+        boolean wantsFood = normalizedRequest.equals("food") || normalizedRequest.equals("comida") || normalizedRequest.equals("alimento") || normalizedRequest.equals("alimentos") || normalizedRequest.equals("rango");
+        boolean wantsAll = normalizedRequest.isBlank() || normalizedRequest.equals("all") || normalizedRequest.equals("tudo") || normalizedRequest.equals("todos") || normalizedRequest.equals("recursos") || normalizedRequest.equals("itens") || normalizedRequest.equals("inventario") || normalizedRequest.equals("inventário");
+        boolean giveAllMatching = wantsAll || wantsFood || count >= 999;
+        String searchName = normalizedRequest.replace(" ", "_");
         int givenCount = 0;
+        int stacksGiven = 0;
+        boolean droppedAtFeet = false;
 
-        for (int i = 0; i < companion.getContainerSize() && givenCount < count; i++) {
-            net.minecraft.world.item.ItemStack stack = companion.getItem(i);
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
             if (stack.isEmpty()) continue;
 
-            // Check if item matches the search term
-            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
-            String itemDesc = stack.getItem().getDescription().getString().toLowerCase();
+            boolean matches = wantsAll
+                ? true
+                : wantsFood
+                    ? stack.getFoodProperties(companion) != null
+                    : (!searchName.isEmpty() && containerHasRequestedItem(stack, searchName));
 
-            if (itemId.contains(searchName) || itemDesc.contains(searchName) || searchName.isEmpty()) {
-                int toGive = Math.min(stack.getCount(), count - givenCount);
+            if (!matches) {
+                continue;
+            }
 
-                // Create stack to give
-                net.minecraft.world.item.ItemStack giveStack = stack.copy();
-                giveStack.setCount(toGive);
+            int desired = giveAllMatching ? stack.getCount() : Math.min(stack.getCount(), Math.max(1, count - givenCount));
+            if (desired <= 0) {
+                continue;
+            }
 
-                // Try to add to player inventory
-                if (target.getInventory().add(giveStack)) {
-                    stack.shrink(toGive);
-                    if (stack.isEmpty()) {
-                        companion.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
-                    }
-                    givenCount += toGive;
-                    LLMoblings.LOGGER.info("[{}] Gave {} x{} to {}",
-                            companion.getCompanionName(), giveStack.getItem().getDescription().getString(),
-                            toGive, target.getName().getString());
-                } else {
-                    // Player inventory full, drop at their feet
-                    target.drop(giveStack, false);
-                    stack.shrink(toGive);
-                    if (stack.isEmpty()) {
-                        companion.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
-                    }
-                    givenCount += toGive;
-                    sendMessage("Seu inventário está cheio, então deixei os itens aos seus pés.");
+            ItemStack giveStack = stack.copy();
+            giveStack.setCount(desired);
+            if (target.getInventory().add(giveStack)) {
+                stack.shrink(desired);
+                if (stack.isEmpty()) {
+                    companion.setItem(i, ItemStack.EMPTY);
                 }
+                givenCount += desired;
+                stacksGiven++;
+            } else {
+                target.drop(giveStack, false);
+                stack.shrink(desired);
+                if (stack.isEmpty()) {
+                    companion.setItem(i, ItemStack.EMPTY);
+                }
+                givenCount += desired;
+                stacksGiven++;
+                droppedAtFeet = true;
+            }
+
+            if (!giveAllMatching && givenCount >= count) {
+                break;
             }
         }
 
         if (givenCount > 0) {
-            sendMessage("Aqui está! Entreguei " + givenCount + " de " + itemName + ".");
-        } else if (itemName.isEmpty()) {
+            String label = wantsAll ? "meu inventário inteiro" : (wantsFood ? "comida" : itemName);
+            if (wantsAll) {
+                sendMessage("Aqui está! Entreguei tudo o que eu tinha comigo: " + givenCount + " itens em " + stacksGiven + " pilhas.");
+            } else {
+                sendMessage("Aqui está! Entreguei " + givenCount + " de " + label + ".");
+            }
+            if (droppedAtFeet) {
+                sendMessage("Seu inventário encheu, então deixei o restante aos seus pés.");
+            }
+        } else if (wantsAll) {
+            sendMessage("Meu inventário está vazio.");
+        } else if (itemName == null || itemName.isBlank()) {
             sendMessage("Que item você quer que eu te entregue?");
+        } else if (wantsFood) {
+            sendMessage("Eu não tenho comida no meu inventário.");
         } else {
             sendMessage("Eu não tenho " + itemName + " no meu inventário.");
         }
@@ -2148,41 +2001,446 @@ public class CompanionAI {
 
     private void tryToSleep() {
         LLMoblings.LOGGER.info("[{}] Attempting to sleep...", companion.getCompanionName());
-        if (bedPos == null) {
+        if (bedPos == null || !(companion.level().getBlockState(bedPos).getBlock() instanceof BedBlock)) {
             findAndSetBed();
         }
 
-        if (bedPos != null) {
-            double dist = companion.position().distanceTo(Vec3.atCenterOf(bedPos));
-            if (dist > 3) {
-                goTo(bedPos);
-                sendMessage("Indo para a cama...");
-            } else {
-                // Check if it's night time
-                if (companion.level() instanceof ServerLevel serverLevel) {
-                    long dayTime = serverLevel.getDayTime() % 24000;
-                    if (dayTime >= 12542 && dayTime <= 23459) {
-                        sendMessage("*deita na cama* Boa noite!");
-                        LLMoblings.LOGGER.info("[{}] Going to sleep", companion.getCompanionName());
-                        // Note: Actual sleeping mechanics would require more complex implementation
-                    } else {
-                        sendMessage("Ainda não é noite. Eu só consigo dormir quando escurece.");
-                        LLMoblings.LOGGER.info("[{}] Cannot sleep - not night time (dayTime={})", companion.getCompanionName(), dayTime);
-                    }
-                }
-            }
-        } else {
+        if (bedPos == null) {
             sendMessage("Eu preciso de uma cama para dormir! Encontre uma para mim primeiro.");
+            return;
+        }
+
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            long dayTime = serverLevel.getDayTime() % 24000;
+            if (dayTime < 12542 || dayTime > 23459) {
+                sendMessage("Ainda não é noite. Eu só consigo dormir quando escurece.");
+                LLMoblings.LOGGER.info("[{}] Cannot sleep - not night time (dayTime={})", companion.getCompanionName(), dayTime);
+                return;
+            }
+        }
+
+        BlockPos sleepApproach = findBedApproachPos(bedPos);
+        double dist = companion.position().distanceTo(Vec3.atCenterOf(sleepApproach));
+        if (dist > 1.8) {
+            pendingSleepBedPos = bedPos;
+            targetPos = sleepApproach;
+            currentState = AIState.GOING_TO;
+            companion.getNavigation().moveTo(sleepApproach.getX() + 0.5, sleepApproach.getY(), sleepApproach.getZ() + 0.5, 1.0);
+            sendMessage("Indo para a cama...");
+            return;
+        }
+
+        pendingSleepBedPos = null;
+        companion.getNavigation().stop();
+        companion.teleportTo(sleepApproach.getX() + 0.5, sleepApproach.getY(), sleepApproach.getZ() + 0.5);
+        boolean slept = startSleepingOnBed(bedPos);
+        if (slept) {
+            sendMessage("*deita na cama* Boa noite!");
+            LLMoblings.LOGGER.info("[{}] Going to sleep", companion.getCompanionName());
+        } else {
+            sendMessage("Cheguei na cama, mas não consegui entrar no estado de sono corretamente.");
         }
     }
 
-    private void equipBestGear() {
-        // Check current weapon - only skip if already holding a WEAPON
-        ItemStack currentWeapon = companion.getMainHandItem();
-        boolean holdingWeapon = !currentWeapon.isEmpty() &&
-            (currentWeapon.getItem() instanceof SwordItem || currentWeapon.getItem() instanceof AxeItem);
+    private BlockPos findBedApproachPos(BlockPos bed) {
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos candidate = bed.relative(direction);
+            if (canStandAtForBedApproach(candidate)) {
+                return candidate;
+            }
+        }
+        return bed;
+    }
 
-        // Search inventory for best weapon
+    private boolean canStandAtForBedApproach(BlockPos feetPos) {
+        BlockPos below = feetPos.below();
+        BlockState floor = companion.level().getBlockState(below);
+        return floor.isFaceSturdy(companion.level(), below, Direction.UP)
+                && companion.level().getBlockState(feetPos).isAir()
+                && companion.level().getBlockState(feetPos.above()).isAir();
+    }
+
+    private void wakeUpForAction(String actionName) {
+        if (!isCompanionSleeping()) {
+            return;
+        }
+
+        companion.getNavigation().stop();
+        pendingSleepBedPos = null;
+        if ("follow".equals(actionName) || "come".equals(actionName) || "goto".equals(actionName)) {
+            targetPos = null;
+        }
+
+        boolean woke = false;
+        try {
+            var method = companion.getClass().getMethod("stopSleeping");
+            method.invoke(companion);
+            woke = true;
+        } catch (ReflectiveOperationException ignored) {
+        }
+
+        try {
+            var method = companion.getClass().getMethod("setSleepingPos", Optional.class);
+            method.invoke(companion, Optional.empty());
+            woke = true;
+        } catch (ReflectiveOperationException ignored) {
+        }
+
+        companion.setPose(Pose.STANDING);
+        companion.refreshDimensions();
+        if (woke) {
+            companion.hurtMarked = true;
+        }
+    }
+
+    private boolean isCompanionSleeping() {
+        try {
+            var method = companion.getClass().getMethod("isSleeping");
+            Object result = method.invoke(companion);
+            if (result instanceof Boolean sleeping) {
+                return sleeping;
+            }
+        } catch (ReflectiveOperationException ignored) {
+        }
+        return companion.getPose() == Pose.SLEEPING;
+    }
+
+    private boolean equipBestWeaponForCombat() {
+        ItemStack currentMainHand = companion.getMainHandItem();
+        double bestDamage = getWeaponDamage(currentMainHand);
+        int bestSlot = -1;
+
+        for (int slot = 0; slot < companion.getContainerSize(); slot++) {
+            ItemStack stack = companion.getItem(slot);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            double damage = getWeaponDamage(stack);
+            if (damage > bestDamage) {
+                bestDamage = damage;
+                bestSlot = slot;
+            }
+        }
+
+        if (bestSlot < 0) {
+            return !currentMainHand.isEmpty() && getWeaponDamage(currentMainHand) > 0.0D;
+        }
+
+        ItemStack fromInventory = companion.getItem(bestSlot);
+        ItemStack previousMainHand = currentMainHand.copy();
+        ItemStack toEquip = fromInventory.copy();
+        toEquip.setCount(1);
+
+        companion.setItemSlot(EquipmentSlot.MAINHAND, toEquip);
+        fromInventory.shrink(1);
+        companion.setItem(bestSlot, fromInventory.isEmpty() ? ItemStack.EMPTY : fromInventory);
+
+        if (!previousMainHand.isEmpty()) {
+            companion.addToInventory(previousMainHand.copy());
+        }
+
+        return true;
+    }
+
+    private boolean startSleepingOnBed(BlockPos bed) {
+        try {
+            var method = companion.getClass().getMethod("startSleeping", BlockPos.class);
+            method.invoke(companion, bed);
+            return true;
+        } catch (Exception ignored) {
+        }
+
+        try {
+            companion.setPose(Pose.SLEEPING);
+            var method = companion.getClass().getMethod("setSleepingPos", Optional.class);
+            method.invoke(companion, Optional.of(bed));
+            return true;
+        } catch (Exception ignored) {
+        }
+
+        try {
+            companion.setPose(Pose.SLEEPING);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private @Nullable EquipmentSlot parseEquipmentSlot(String slotName) {
+        if (slotName == null || slotName.isBlank()) {
+            return null;
+        }
+        return switch (slotName.toLowerCase(Locale.ROOT)) {
+            case "head", "helmet" -> EquipmentSlot.HEAD;
+            case "chest", "chestplate" -> EquipmentSlot.CHEST;
+            case "legs", "leggings" -> EquipmentSlot.LEGS;
+            case "feet", "boots" -> EquipmentSlot.FEET;
+            default -> null;
+        };
+    }
+
+    private void equipRequestedGear(String material, String gearType, String slotName, String match) {
+        companion.suppressAutoEquipForTicks(120);
+        EquipmentSlot slot = parseEquipmentSlot(slotName);
+        String normalizedGearType = gearType == null || gearType.isBlank() ? "any" : gearType.toLowerCase(Locale.ROOT);
+        String normalizedMatch = match == null ? "" : match.toLowerCase(Locale.ROOT);
+        String normalizedMaterial = material == null || material.isBlank() ? "any" : material.toLowerCase(Locale.ROOT);
+
+        if ((normalizedGearType.equals("any") || normalizedGearType.isBlank()) && slot == null && normalizedMatch.isBlank() && (normalizedMaterial.equals("any") || normalizedMaterial.isBlank())) {
+            equipBestGear();
+            return;
+        }
+
+        if (equipRequestedFromInventory(normalizedMaterial, normalizedGearType, slot, normalizedMatch)) {
+            sendMessage("Equipei exatamente o item que você pediu.");
+            return;
+        }
+
+        sendMessage("Eu não encontrei esse equipamento no meu inventário.");
+    }
+
+    private void getRequestedGear(String material, String gearType, String slotName, String match) {
+        companion.suppressAutoEquipForTicks(120);
+        EquipmentSlot slot = parseEquipmentSlot(slotName);
+        String normalizedGearType = gearType == null || gearType.isBlank() ? "any" : gearType.toLowerCase(Locale.ROOT);
+        String normalizedMatch = match == null ? "" : match.toLowerCase(Locale.ROOT);
+        String normalizedMaterial = material == null || material.isBlank() ? "any" : material.toLowerCase(Locale.ROOT);
+
+        if (equipRequestedFromInventory(normalizedMaterial, normalizedGearType, slot, normalizedMatch)) {
+            sendMessage("Eu já tinha esse equipamento no inventário e equipei agora.");
+            return;
+        }
+
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            int pulled = retrieveGearFromNearbyStorage(serverLevel, normalizedMaterial, normalizedGearType, slot, normalizedMatch);
+            if (pulled > 0) {
+                boolean equipped = equipRequestedFromInventory(normalizedMaterial, normalizedGearType, slot, normalizedMatch);
+                sendMessage(equipped ? "Peguei o equipamento nos baús próximos e equipei." : "Peguei o item pedido nos baús próximos.");
+                return;
+            }
+
+            if (craftRequestedGearIfPossible(normalizedMaterial, normalizedGearType, slot, normalizedMatch)) {
+                boolean equipped = equipRequestedFromInventory(normalizedMaterial, normalizedGearType, slot, normalizedMatch);
+                sendMessage(equipped ? "Fabriquei o equipamento pedido e equipei." : "Fabriquei o item pedido.");
+                return;
+            }
+        }
+
+        sendMessage("Eu não encontrei esse equipamento no inventário, nos baús próximos nem nos meus materiais.");
+    }
+
+    private boolean equipRequestedFromInventory(String material, String gearType, @Nullable EquipmentSlot requestedSlot, String match) {
+        boolean equippedSomething = false;
+        String normalizedMatch = match == null ? "" : match.toLowerCase(Locale.ROOT);
+
+        if (gearType.equals("weapon") || (gearType.equals("any") && requestedSlot == null && !normalizedMatch.isBlank())) {
+            ItemStack currentWeapon = companion.getMainHandItem();
+            double bestDamage = getWeaponDamage(currentWeapon);
+            int bestSlot = -1;
+            ItemStack bestWeapon = ItemStack.EMPTY;
+            for (int i = 0; i < companion.getContainerSize(); i++) {
+                ItemStack stack = companion.getItem(i);
+                if (!isRequestedGear(stack, material, "weapon", null, normalizedMatch)) {
+                    continue;
+                }
+                double damage = getWeaponDamage(stack);
+                if (!normalizedMatch.isBlank() || damage > bestDamage) {
+                    bestDamage = damage;
+                    bestSlot = i;
+                    bestWeapon = stack.copy();
+                    bestWeapon.setCount(1);
+                    if (!normalizedMatch.isBlank()) {
+                        break;
+                    }
+                }
+            }
+            if (bestSlot >= 0 && !bestWeapon.isEmpty()) {
+                if (!currentWeapon.isEmpty()) {
+                    companion.addToInventory(currentWeapon.copy());
+                }
+                companion.setItemSlot(EquipmentSlot.MAINHAND, bestWeapon);
+                ItemStack source = companion.getItem(bestSlot);
+                source.shrink(1);
+                companion.setItem(bestSlot, source.isEmpty() ? ItemStack.EMPTY : source);
+                equippedSomething = true;
+            }
+            return equippedSomething;
+        }
+
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (!isRequestedGear(stack, material, gearType, requestedSlot, normalizedMatch)) {
+                continue;
+            }
+
+            Item item = stack.getItem();
+            if (item instanceof ArmorItem armorItem) {
+                EquipmentSlot slot = armorItem.getEquipmentSlot();
+                ItemStack equipped = companion.getItemBySlot(slot);
+                if (equipped.isEmpty() || !normalizedMatch.isBlank() || !(equipped.getItem() instanceof ArmorItem equippedArmor) || armorItem.getDefense() >= equippedArmor.getDefense()) {
+                    if (!equipped.isEmpty()) {
+                        companion.addToInventory(equipped.copy());
+                    }
+                    ItemStack toEquip = stack.copy();
+                    toEquip.setCount(1);
+                    companion.setItemSlot(slot, toEquip);
+                    stack.shrink(1);
+                    companion.setItem(i, stack.isEmpty() ? ItemStack.EMPTY : stack);
+                    return true;
+                }
+            } else if (gearType.equals("item") && itemMatchesKeyword(item, normalizedMatch)) {
+                if (!companion.getMainHandItem().isEmpty()) {
+                    companion.addToInventory(companion.getMainHandItem().copy());
+                }
+                ItemStack toEquip = stack.copy();
+                toEquip.setCount(1);
+                companion.setItemSlot(EquipmentSlot.MAINHAND, toEquip);
+                stack.shrink(1);
+                companion.setItem(i, stack.isEmpty() ? ItemStack.EMPTY : stack);
+                return true;
+            }
+        }
+
+        return equippedSomething;
+    }
+
+    private boolean isRequestedGear(ItemStack stack, String material, String gearType, @Nullable EquipmentSlot requestedSlot, String match) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+        Item item = stack.getItem();
+        String itemId = BuiltInRegistries.ITEM.getKey(item).getPath().toLowerCase(Locale.ROOT);
+        String itemDesc = normalizeCommandText(item.getDescription().getString()).replace(' ', '_');
+
+        if (material != null && !material.isBlank() && !material.equals("any") && !itemId.contains(material)) {
+            return false;
+        }
+
+        if (gearType.equals("weapon")) {
+            if (!(item instanceof SwordItem || item instanceof AxeItem)) {
+                return false;
+            }
+        } else if (gearType.equals("armor")) {
+            if (!(item instanceof ArmorItem armorItem)) {
+                return false;
+            }
+            if (requestedSlot != null && armorItem.getEquipmentSlot() != requestedSlot) {
+                return false;
+            }
+        } else if (gearType.equals("item")) {
+            if (match == null || match.isBlank()) {
+                return false;
+            }
+            return itemMatchesKeyword(item, match);
+        }
+
+        if (match != null && !match.isBlank()) {
+            return keywordMatches(itemId, itemDesc, match);
+        }
+        return true;
+    }
+
+    private boolean keywordMatches(String itemId, String itemDesc, String match) {
+        if (match == null || match.isBlank()) {
+            return true;
+        }
+        for (String token : getKeywordVariants(match)) {
+            if (itemId.contains(token) || itemDesc.contains(token)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean itemMatchesKeyword(Item item, String match) {
+        String itemId = BuiltInRegistries.ITEM.getKey(item).getPath().toLowerCase(Locale.ROOT);
+        String itemDesc = normalizeCommandText(item.getDescription().getString()).replace(' ', '_');
+        return keywordMatches(itemId, itemDesc, match);
+    }
+
+    private List<String> getKeywordVariants(String match) {
+        String normalized = match.toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "sword", "espada" -> List.of("sword", "espada");
+            case "axe", "machado" -> List.of("axe", "machado");
+            case "glove", "luva", "gauntlet", "manopla" -> List.of("glove", "luva", "gauntlet", "manopla");
+            case "boot", "boots", "bota", "botas" -> List.of("boot", "boots", "bota", "botas");
+            case "helmet", "capacete", "elmo" -> List.of("helmet", "capacete", "elmo");
+            case "chestplate", "peitoral" -> List.of("chestplate", "peitoral", "couraça", "couraca");
+            case "leggings", "legging", "calca", "calça", "perneira" -> List.of("leggings", "legging", "calca", "calca", "perneira");
+            case "wheat", "trigo" -> List.of("wheat", "trigo");
+            case "carrot", "cenoura", "cenouras" -> List.of("carrot", "cenoura", "cenouras");
+            case "bread", "pao", "pão" -> List.of("bread", "pao", "pão");
+            case "food", "comida", "alimento" -> List.of("food", "comida", "alimento");
+            default -> List.of(normalized);
+        };
+    }
+
+    private boolean containerHasRequestedItem(ItemStack stack, String itemName) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+        String normalizedRequest = itemName == null ? "" : normalizeCommandText(itemName).replace(' ', '_');
+        if (normalizedRequest.equals("food") || normalizedRequest.equals("comida") || normalizedRequest.equals("alimento") || normalizedRequest.equals("alimentos")) {
+            return stack.getFoodProperties(companion) != null;
+        }
+        String stackId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+        String stackName = normalizeCommandText(stack.getItem().getDescription().getString()).replace(' ', '_');
+        return keywordMatches(stackId, stackName, normalizedRequest) || normalizedRequest.contains(stackId);
+    }
+
+    private boolean craftRequestedGearIfPossible(String material, String gearType, @Nullable EquipmentSlot requestedSlot, String match) {
+        if (gearType.equals("weapon")) {
+            if (match != null && !match.isBlank() && !match.contains("sword") && !match.contains("espada")) {
+                return false;
+            }
+            return craftBestAvailableSword();
+        }
+        if (gearType.equals("armor")) {
+            if (requestedSlot != null) {
+                return craftArmorForSlot(requestedSlot, material);
+            }
+            boolean crafted = false;
+            for (EquipmentSlot slot : new EquipmentSlot[] { EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.HEAD, EquipmentSlot.FEET }) {
+                if (companion.getItemBySlot(slot).isEmpty()) {
+                    crafted |= craftArmorForSlot(slot, material);
+                }
+            }
+            return crafted;
+        }
+        return false;
+    }
+
+    private void equipBestGear() {
+        boolean equippedSomething = equipBestGearFromInventory();
+        if (equippedSomething) {
+            sendMessage("Equipei meu melhor equipamento disponível.");
+            return;
+        }
+
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            int pulled = retrieveGearFromNearbyStorage(serverLevel, "any", true, true);
+            if (pulled > 0) {
+                equipBestGearFromInventory();
+                sendMessage("Peguei equipamento do armazenamento e equipei o melhor que achei.");
+                return;
+            }
+
+            if (craftBasicGearIfPossible()) {
+                equipBestGearFromInventory();
+                sendMessage("Fabriquei e equipei equipamento básico com os materiais que eu tinha.");
+                return;
+            }
+        }
+
+        sendMessage("Eu não encontrei arma ou armadura útil no meu inventário, em baús próximos nem nos meus materiais.");
+    }
+
+    private boolean equipBestGearFromInventory() {
+        boolean equippedSomething = false;
+
+        ItemStack currentWeapon = companion.getMainHandItem();
+        boolean holdingWeapon = !currentWeapon.isEmpty() && (currentWeapon.getItem() instanceof SwordItem || currentWeapon.getItem() instanceof AxeItem);
         ItemStack bestWeapon = ItemStack.EMPTY;
         int bestSlot = -1;
         double bestDamage = holdingWeapon ? getWeaponDamage(currentWeapon) : 0;
@@ -2190,12 +2448,12 @@ public class CompanionAI {
         for (int i = 0; i < companion.getContainerSize(); i++) {
             ItemStack stack = companion.getItem(i);
             if (stack.isEmpty()) continue;
-
             Item item = stack.getItem();
             if (item instanceof SwordItem || item instanceof AxeItem) {
                 double damage = getWeaponDamage(stack);
                 if (damage > bestDamage) {
-                    bestWeapon = stack;
+                    bestWeapon = stack.copy();
+                    bestWeapon.setCount(1);
                     bestSlot = i;
                     bestDamage = damage;
                 }
@@ -2203,21 +2461,44 @@ public class CompanionAI {
         }
 
         if (!bestWeapon.isEmpty() && bestSlot >= 0) {
-            // Put current item back in inventory if holding something
             if (!currentWeapon.isEmpty()) {
                 companion.addToInventory(currentWeapon.copy());
             }
-            // Equip the better weapon
-            companion.setItemSlot(EquipmentSlot.MAINHAND, bestWeapon.copy());
-            companion.setItem(bestSlot, ItemStack.EMPTY);
-            sendMessage("Equipei " + bestWeapon.getHoverName().getString() + "!");
-        } else if (holdingWeapon) {
-            sendMessage("Eu já estou usando minha melhor arma: " + currentWeapon.getHoverName().getString());
-        } else {
-            // No weapon in inventory, go look for one
-            sendMessage("Eu não tenho armas no meu inventário. Vou procurar uma!");
-            startAutonomous(32);
+            companion.setItemSlot(EquipmentSlot.MAINHAND, bestWeapon);
+            ItemStack source = companion.getItem(bestSlot);
+            source.shrink(1);
+            companion.setItem(bestSlot, source.isEmpty() ? ItemStack.EMPTY : source);
+            equippedSomething = true;
         }
+
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty() || !(stack.getItem() instanceof ArmorItem armorItem)) continue;
+            EquipmentSlot slot = armorItem.getEquipmentSlot();
+            ItemStack equipped = companion.getItemBySlot(slot);
+            if (equipped.isEmpty()) {
+                ItemStack toEquip = stack.copy();
+                toEquip.setCount(1);
+                companion.setItemSlot(slot, toEquip);
+                stack.shrink(1);
+                companion.setItem(i, stack.isEmpty() ? ItemStack.EMPTY : stack);
+                equippedSomething = true;
+                continue;
+            }
+            if (equipped.getItem() instanceof ArmorItem equippedArmor) {
+                if (armorItem.getDefense() > equippedArmor.getDefense()) {
+                    companion.addToInventory(equipped.copy());
+                    ItemStack toEquip = stack.copy();
+                    toEquip.setCount(1);
+                    companion.setItemSlot(slot, toEquip);
+                    stack.shrink(1);
+                    companion.setItem(i, stack.isEmpty() ? ItemStack.EMPTY : stack);
+                    equippedSomething = true;
+                }
+            }
+        }
+
+        return equippedSomething;
     }
 
     private double getWeaponDamage(ItemStack stack) {
@@ -2286,54 +2567,56 @@ public class CompanionAI {
     }
 
     private void getGearFromME(String material) {
-        if (!AE2Integration.isAE2Loaded()) {
-            sendMessage("Eu não consigo encontrar uma rede ME aqui!");
+        String requestedMaterial = material == null || material.isBlank() ? "any" : material.toLowerCase(Locale.ROOT);
+
+        if (equipBestGearFromInventory()) {
+            sendMessage("Eu já tinha equipamento útil no inventário e equipei agora.");
             return;
         }
 
-        if (!(companion.level() instanceof ServerLevel serverLevel)) {
-            sendMessage("Tem algo errado com o mundo...");
-            return;
+        if (companion.level() instanceof ServerLevel serverLevel) {
+            int pulled = retrieveGearFromNearbyStorage(serverLevel, requestedMaterial, true, true);
+            if (pulled > 0) {
+                equipBestGearFromInventory();
+                sendMessage("Peguei equipamento do armazenamento próximo.");
+                return;
+            }
+
+            if (AE2Integration.isAE2Loaded()) {
+                List<BlockPos> meAccessPoints = AE2Integration.findMEAccessPoints(serverLevel, companion.blockPosition(), 32);
+                if (!meAccessPoints.isEmpty()) {
+                    BlockPos terminal = meAccessPoints.get(0);
+                    sendMessage("Encontrei um terminal ME! Vou buscar equipamento de " + requestedMaterial + "...");
+
+                    List<Item> targetItems;
+                    if (requestedMaterial.contains("diamond")) {
+                        targetItems = AE2Integration.getDiamondArmorItems();
+                    } else {
+                        targetItems = AE2Integration.getIronArmorItems();
+                    }
+
+                    currentState = AIState.GOING_TO;
+                    targetPos = terminal;
+                    companion.getNavigation().moveTo(terminal.getX() + 0.5, terminal.getY(), terminal.getZ() + 0.5, 1.0);
+                    double distance = companion.position().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(terminal));
+                    if (distance < 5.0) {
+                        retrieveOrCraftGear(serverLevel, terminal, targetItems, requestedMaterial);
+                    } else {
+                        pendingGearRequest = new GearRequest(terminal, targetItems, requestedMaterial);
+                        sendMessage("Estou indo até o terminal...");
+                    }
+                    return;
+                }
+            }
+
+            if (craftBasicGearIfPossible()) {
+                equipBestGearFromInventory();
+                sendMessage("Não achei equipamento pronto, mas fabriquei o que consegui.");
+                return;
+            }
         }
 
-        // Find ME access point
-        List<BlockPos> meAccessPoints = AE2Integration.findMEAccessPoints(
-                serverLevel, companion.blockPosition(), 32);
-
-        if (meAccessPoints.isEmpty()) {
-            sendMessage("Eu não consigo encontrar um terminal ME por perto!");
-            return;
-        }
-
-        BlockPos terminal = meAccessPoints.get(0);
-        sendMessage("Encontrei um terminal ME! Vou buscar equipamento de " + material + "...");
-
-        // Determine which items to get based on material
-        List<Item> targetItems;
-        if (material.toLowerCase().contains("diamond")) {
-            targetItems = AE2Integration.getDiamondArmorItems();
-        } else {
-            targetItems = AE2Integration.getIronArmorItems();
-        }
-
-        // Navigate to the terminal first
-        currentState = AIState.GOING_TO;
-        targetPos = terminal;
-
-        // We'll need to process this in tick() - for now start moving
-        // and set up a task to extract/craft when we arrive
-        companion.getNavigation().moveTo(terminal.getX() + 0.5, terminal.getY(), terminal.getZ() + 0.5, 1.0);
-
-        // Schedule gear retrieval after reaching terminal
-        // For now, do it immediately if close enough
-        double distance = companion.position().distanceTo(net.minecraft.world.phys.Vec3.atCenterOf(terminal));
-        if (distance < 5.0) {
-            retrieveOrCraftGear(serverLevel, terminal, targetItems, material);
-        } else {
-            // Store pending gear request for when we arrive
-            pendingGearRequest = new GearRequest(terminal, targetItems, material);
-            sendMessage("Estou indo até o terminal...");
-        }
+        sendMessage("Eu não encontrei equipamento útil em baús próximos, na rede ME ou nos meus materiais.");
     }
 
     private GearRequest pendingGearRequest = null;
@@ -2468,18 +2751,7 @@ public class CompanionAI {
 
             if (!meTerminals.isEmpty()) {
                 BlockPos terminal = meTerminals.get(0);
-                sendMessage("Encontrei um terminal ME! Vou depositar os itens...");
-
-                // Navigate to terminal
-                currentState = AIState.GOING_TO;
-                targetPos = terminal;
-                pendingDepositRequest = new DepositRequest(terminal, true, keepGear);
-                companion.getNavigation().moveTo(terminal.getX() + 0.5, terminal.getY(), terminal.getZ() + 0.5, 1.0);
-
-                double distance = companion.position().distanceTo(Vec3.atCenterOf(terminal));
-                if (distance < 5.0) {
-                    executeDeposit(serverLevel, terminal, true, keepGear);
-                }
+                startDepositVisit(serverLevel, terminal, true, keepGear, null, -1, "Encontrei um terminal ME! Vou depositar os itens...");
                 return;
             }
         }
@@ -2487,16 +2759,7 @@ public class CompanionAI {
         // Try regular chests
         BlockPos chest = findNearbyChest(serverLevel, 16);
         if (chest != null) {
-            sendMessage("Encontrei um baú! Vou depositar os itens...");
-            currentState = AIState.GOING_TO;
-            targetPos = chest;
-            pendingDepositRequest = new DepositRequest(chest, false, keepGear);
-            companion.getNavigation().moveTo(chest.getX() + 0.5, chest.getY(), chest.getZ() + 0.5, 1.0);
-
-            double distance = companion.position().distanceTo(Vec3.atCenterOf(chest));
-            if (distance < 3.0) {
-                executeDeposit(serverLevel, chest, false, keepGear);
-            }
+            startDepositVisit(serverLevel, chest, false, keepGear, null, -1, "Encontrei um baú! Vou depositar os itens...");
             return;
         }
 
@@ -2506,8 +2769,8 @@ public class CompanionAI {
     private DepositRequest pendingDepositRequest = null;
     private ChestRetrievalRequest pendingChestRetrievalRequest = null;
 
-    private record DepositRequest(BlockPos pos, boolean isME, boolean keepGear) {}
-    private record ChestRetrievalRequest(BlockPos pos, String itemName, int count) {}
+    private record DepositRequest(BlockPos storagePos, BlockPos approachPos, boolean isME, boolean keepGear, @Nullable String itemName, int count) {}
+    private record ChestRetrievalRequest(BlockPos storagePos, BlockPos approachPos, String itemName, int count) {}
 
     private BlockPos findNearbyChest(ServerLevel level, int radius) {
         BlockPos center = companion.blockPosition();
@@ -2524,21 +2787,102 @@ public class CompanionAI {
         return null;
     }
 
-    private void executeDeposit(ServerLevel level, BlockPos storagePos, boolean isME, boolean keepGear) {
-        int deposited = 0;
+    private BlockPos findStorageApproachPos(BlockPos storagePos) {
+        BlockPos bestPos = storagePos;
+        double bestDistance = Double.MAX_VALUE;
 
-        if (isME) {
-            // Deposit into ME network
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos candidate = storagePos.relative(direction);
+            if (!canStandNearStorage(candidate)) {
+                continue;
+            }
+            double distance = candidate.distSqr(companion.blockPosition());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestPos = candidate;
+            }
+        }
+
+        if (bestPos.equals(storagePos)) {
+            BlockPos above = storagePos.above();
+            if (canStandNearStorage(above)) {
+                bestPos = above;
+            }
+        }
+
+        return bestPos;
+    }
+
+    private boolean canStandNearStorage(BlockPos pos) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return false;
+        }
+
+        BlockState feetState = serverLevel.getBlockState(pos);
+        BlockState headState = serverLevel.getBlockState(pos.above());
+        BlockState floorState = serverLevel.getBlockState(pos.below());
+
+        boolean feetFree = feetState.isAir() || feetState.canBeReplaced();
+        boolean headFree = headState.isAir() || headState.canBeReplaced();
+        boolean hasFloor = !floorState.isAir() && floorState.isFaceSturdy(serverLevel, pos.below(), Direction.UP);
+
+        return feetFree && headFree && hasFloor;
+    }
+
+    private void startDepositVisit(ServerLevel level, BlockPos storagePos, boolean isME, boolean keepGear, @Nullable String itemName, int count, String message) {
+        BlockPos approachPos = findStorageApproachPos(storagePos);
+        pendingDepositRequest = new DepositRequest(storagePos, approachPos, isME, keepGear, itemName, count);
+        currentState = AIState.GOING_TO;
+        targetPos = approachPos;
+        companion.getNavigation().moveTo(approachPos.getX() + 0.5, approachPos.getY(), approachPos.getZ() + 0.5, 1.0);
+
+        double distance = companion.position().distanceTo(Vec3.atCenterOf(approachPos));
+        if (distance < 2.25) {
+            executeDeposit(level, storagePos, isME, keepGear, itemName, count);
+            pendingDepositRequest = null;
+            targetPos = null;
+            currentState = AIState.IDLE;
+        } else if (message != null && !message.isBlank()) {
+            sendMessage(message);
+        }
+    }
+
+    private void startChestRetrievalVisit(ServerLevel level, BlockPos chestPos, String itemName, int count, String message) {
+        BlockPos approachPos = findStorageApproachPos(chestPos);
+        pendingChestRetrievalRequest = new ChestRetrievalRequest(chestPos, approachPos, itemName, count);
+        currentState = AIState.GOING_TO;
+        targetPos = approachPos;
+        companion.getNavigation().moveTo(approachPos.getX() + 0.5, approachPos.getY(), approachPos.getZ() + 0.5, 1.0);
+
+        double distance = companion.position().distanceTo(Vec3.atCenterOf(approachPos));
+        if (distance < 2.25) {
+            executeChestRetrieval(level, pendingChestRetrievalRequest);
+            pendingChestRetrievalRequest = null;
+            targetPos = null;
+            currentState = AIState.IDLE;
+        } else if (message != null && !message.isBlank()) {
+            sendMessage(message);
+        }
+    }
+
+    private void executeDeposit(ServerLevel level, BlockPos storagePos, boolean isME, boolean keepGear, @Nullable String itemName, int count) {
+        int deposited = 0;
+        boolean specific = itemName != null && !itemName.isBlank();
+
+        if (isME && !specific) {
             deposited = depositToME(level, storagePos, keepGear);
         } else {
-            // Deposit into chest
-            deposited = depositToChest(level, storagePos, keepGear);
+            deposited = depositToChest(level, storagePos, keepGear, itemName, count);
         }
 
         if (deposited > 0) {
-            sendMessage("Depositei " + deposited + " pilhas de itens!" + (keepGear ? " (Mantive meu equipamento)" : ""));
+            if (specific) {
+                sendMessage("Guardei " + deposited + " de " + itemName + " no baú.");
+            } else {
+                sendMessage("Depositei " + deposited + " pilhas de itens!" + (keepGear ? " (Mantive meu equipamento)" : ""));
+            }
         } else {
-            sendMessage("Não consegui depositar nenhum item. O armazenamento pode estar cheio!");
+            sendMessage(specific ? "Não consegui guardar " + itemName + " no baú." : "Não consegui depositar nenhum item. O armazenamento pode estar cheio!");
         }
 
         pendingDepositRequest = null;
@@ -2679,43 +3023,60 @@ public class CompanionAI {
     }
 
     private int depositToChest(ServerLevel level, BlockPos chestPos, boolean keepGear) {
+        return depositToChest(level, chestPos, keepGear, null, -1);
+    }
+
+    private int depositToChest(ServerLevel level, BlockPos chestPos, boolean keepGear, @Nullable String itemName, int count) {
         int deposited = 0;
+        boolean specific = itemName != null && !itemName.isBlank();
+        int remainingToDeposit = count <= 0 ? Integer.MAX_VALUE : count;
 
         net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(chestPos);
         if (!(be instanceof net.minecraft.world.level.block.entity.BaseContainerBlockEntity container)) {
             return 0;
         }
 
-        for (int i = 0; i < companion.getContainerSize(); i++) {
+        for (int i = 0; i < companion.getContainerSize() && remainingToDeposit > 0; i++) {
             ItemStack stack = companion.getItem(i);
             if (stack.isEmpty()) continue;
 
-            // Skip weapons/armor if keepGear is true
             if (keepGear) {
                 Item item = stack.getItem();
-                if (item instanceof SwordItem || item instanceof AxeItem ||
-                    item instanceof ArmorItem) {
+                if (item instanceof SwordItem || item instanceof AxeItem || item instanceof ArmorItem) {
                     continue;
                 }
             }
 
-            // Try to insert into chest
-            for (int j = 0; j < container.getContainerSize(); j++) {
+            if (specific && !containerHasRequestedItem(stack, itemName)) {
+                continue;
+            }
+
+            for (int j = 0; j < container.getContainerSize() && remainingToDeposit > 0; j++) {
                 ItemStack chestStack = container.getItem(j);
-                if (chestStack.isEmpty()) {
-                    container.setItem(j, stack.copy());
-                    companion.setItem(i, ItemStack.EMPTY);
-                    deposited++;
+                int toTransfer = Math.min(stack.getCount(), remainingToDeposit);
+                if (toTransfer <= 0) {
                     break;
-                } else if (ItemStack.isSameItemSameComponents(chestStack, stack) &&
-                           chestStack.getCount() < chestStack.getMaxStackSize()) {
-                    int space = chestStack.getMaxStackSize() - chestStack.getCount();
-                    int toTransfer = Math.min(space, stack.getCount());
-                    chestStack.grow(toTransfer);
+                }
+                if (chestStack.isEmpty()) {
+                    ItemStack moved = stack.copy();
+                    moved.setCount(toTransfer);
+                    container.setItem(j, moved);
                     stack.shrink(toTransfer);
+                    deposited += toTransfer;
+                    remainingToDeposit -= toTransfer;
                     if (stack.isEmpty()) {
                         companion.setItem(i, ItemStack.EMPTY);
-                        deposited++;
+                    }
+                    break;
+                } else if (ItemStack.isSameItemSameComponents(chestStack, stack) && chestStack.getCount() < chestStack.getMaxStackSize()) {
+                    int space = chestStack.getMaxStackSize() - chestStack.getCount();
+                    int actualTransfer = Math.min(space, toTransfer);
+                    chestStack.grow(actualTransfer);
+                    stack.shrink(actualTransfer);
+                    deposited += actualTransfer;
+                    remainingToDeposit -= actualTransfer;
+                    if (stack.isEmpty()) {
+                        companion.setItem(i, ItemStack.EMPTY);
                         break;
                     }
                 }
@@ -2726,6 +3087,23 @@ public class CompanionAI {
         return deposited;
     }
 
+    private void depositSpecificItems(String itemName, int count) {
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            sendMessage("Tem algo errado com o mundo...");
+            return;
+        }
+        if (itemName == null || itemName.isBlank()) {
+            sendMessage("Qual item eu devo guardar no baú?");
+            return;
+        }
+        BlockPos chest = findNearbyChest(serverLevel, 16);
+        if (chest == null) {
+            sendMessage("Eu não encontrei nenhum baú próximo para guardar " + itemName + ".");
+            return;
+        }
+        startDepositVisit(serverLevel, chest, false, true, itemName, Math.max(1, count),
+                "Indo guardar " + itemName + " no baú mais próximo.");
+    }
 
     private void retrieveItemsFromChest(String itemName, int count, BlockPos referencePos, boolean preferReferenceChest) {
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
@@ -2746,16 +3124,8 @@ public class CompanionAI {
             return;
         }
 
-        pendingChestRetrievalRequest = new ChestRetrievalRequest(chest, itemName, Math.max(1, count));
-        currentState = AIState.GOING_TO;
-        targetPos = chest;
-        companion.getNavigation().moveTo(chest.getX() + 0.5, chest.getY(), chest.getZ() + 0.5, 1.0);
-
-        if (companion.position().distanceTo(Vec3.atCenterOf(chest)) < 3.0) {
-            executeChestRetrieval(serverLevel, pendingChestRetrievalRequest);
-        } else {
-            sendMessage("Achei um baú com " + itemName + ". Indo pegar.");
-        }
+        startChestRetrievalVisit(serverLevel, chest, itemName, Math.max(1, count),
+                "Achei um baú com " + itemName + ". Indo pegar.");
     }
 
     private BlockPos findChestWithItem(ServerLevel level, BlockPos center, String itemName, int radius, boolean sortByDistance) {
@@ -2780,13 +3150,9 @@ public class CompanionAI {
     }
 
     private boolean containerHasItem(net.minecraft.world.Container container, String itemName) {
-        String searchName = normalizeCommandText(itemName).replace(' ', '_');
         for (int i = 0; i < container.getContainerSize(); i++) {
             ItemStack stack = container.getItem(i);
-            if (stack.isEmpty()) continue;
-            String stackId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
-            String stackName = normalizeCommandText(stack.getItem().getDescription().getString()).replace(' ', '_');
-            if (stackId.contains(searchName) || stackName.contains(searchName) || searchName.contains(stackId)) {
+            if (containerHasRequestedItem(stack, itemName)) {
                 return true;
             }
         }
@@ -2794,7 +3160,7 @@ public class CompanionAI {
     }
 
     private void executeChestRetrieval(ServerLevel level, ChestRetrievalRequest request) {
-        int retrieved = retrieveFromChest(level, request.pos(), request.itemName(), request.count());
+        int retrieved = retrieveFromChest(level, request.storagePos(), request.itemName(), request.count());
         if (retrieved > 0) {
             sendMessage("Peguei " + retrieved + " de " + request.itemName() + " do baú.");
         } else {
@@ -2809,14 +3175,10 @@ public class CompanionAI {
         if (!(be instanceof net.minecraft.world.level.block.entity.BaseContainerBlockEntity container)) {
             return 0;
         }
-        String searchName = normalizeCommandText(itemName).replace(' ', '_');
         int retrieved = 0;
         for (int i = 0; i < container.getContainerSize() && retrieved < count; i++) {
             ItemStack stack = container.getItem(i);
-            if (stack.isEmpty()) continue;
-            String stackId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
-            String stackName = normalizeCommandText(stack.getItem().getDescription().getString()).replace(' ', '_');
-            if (!(stackId.contains(searchName) || stackName.contains(searchName) || searchName.contains(stackId))) {
+            if (!containerHasRequestedItem(stack, itemName)) {
                 continue;
             }
             int toMove = Math.min(count - retrieved, stack.getCount());
@@ -2834,6 +3196,216 @@ public class CompanionAI {
         }
         container.setChanged();
         return retrieved;
+    }
+
+
+    private int retrieveGearFromNearbyStorage(ServerLevel level, String material, boolean includeArmor, boolean includeWeapon) {
+        String gearType = includeArmor && includeWeapon ? "any" : includeArmor ? "armor" : includeWeapon ? "weapon" : "any";
+        return retrieveGearFromNearbyStorage(level, material, gearType, null, "");
+    }
+
+    private int retrieveGearFromNearbyStorage(ServerLevel level, String material, String gearType, @Nullable EquipmentSlot requestedSlot, String match) {
+        int retrieved = 0;
+        String requestedMaterial = material == null ? "any" : material.toLowerCase(Locale.ROOT);
+        String normalizedMatch = match == null ? "" : match.toLowerCase(Locale.ROOT);
+
+        for (int x = -16; x <= 16; x++) {
+            for (int y = -3; y <= 3; y++) {
+                for (int z = -16; z <= 16; z++) {
+                    BlockPos pos = companion.blockPosition().offset(x, y, z);
+                    if (!(level.getBlockEntity(pos) instanceof Container container)) {
+                        continue;
+                    }
+                    retrieved += pullUsefulGearFromContainer(container, requestedMaterial, gearType, requestedSlot, normalizedMatch);
+                    if (retrieved > 0) {
+                        return retrieved;
+                    }
+                }
+            }
+        }
+        return retrieved;
+    }
+
+    private int pullUsefulGearFromContainer(Container container, String material, String gearType, @Nullable EquipmentSlot requestedSlot, String match) {
+        int retrieved = 0;
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack stack = container.getItem(slot);
+            if (!isRequestedGear(stack, material, gearType, requestedSlot, match)) {
+                continue;
+            }
+            ItemStack moved = stack.copy();
+            moved.setCount(1);
+            if (!companion.addToInventory(moved).isEmpty()) {
+                continue;
+            }
+            stack.shrink(1);
+            container.setItem(slot, stack.isEmpty() ? ItemStack.EMPTY : stack);
+            retrieved++;
+            if (!match.isBlank() || requestedSlot != null || gearType.equals("item")) {
+                break;
+            }
+        }
+        container.setChanged();
+        return retrieved;
+    }
+
+    private boolean matchesRequestedMaterial(String itemId, String material) {
+        if (material == null || material.isBlank() || material.equals("any")) {
+            return true;
+        }
+        return itemId.contains(material);
+    }
+
+    private boolean craftBasicGearIfPossible() {
+        boolean crafted = false;
+        if (!(companion.getMainHandItem().getItem() instanceof SwordItem) && !(companion.getMainHandItem().getItem() instanceof AxeItem)) {
+            crafted |= craftBestAvailableSword();
+        }
+
+        for (EquipmentSlot slot : new EquipmentSlot[] { EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.HEAD, EquipmentSlot.FEET }) {
+            if (companion.getItemBySlot(slot).isEmpty()) {
+                crafted |= craftArmorForSlot(slot);
+            }
+        }
+        return crafted;
+    }
+
+    private boolean craftBestAvailableSword() {
+        if (!ensureSticks(1)) {
+            return false;
+        }
+        if (removeItem(Items.DIAMOND, 2) && removeItem(Items.STICK, 1)) {
+            companion.addToInventory(new ItemStack(Items.DIAMOND_SWORD));
+            return true;
+        }
+        if (removeItem(Items.IRON_INGOT, 2) && removeItem(Items.STICK, 1)) {
+            companion.addToInventory(new ItemStack(Items.IRON_SWORD));
+            return true;
+        }
+        if (removeItem(Items.COBBLESTONE, 2) && removeItem(Items.STICK, 1)) {
+            companion.addToInventory(new ItemStack(Items.STONE_SWORD));
+            return true;
+        }
+        if (removeItemsByPathContains("planks", 2) && removeItem(Items.STICK, 1)) {
+            companion.addToInventory(new ItemStack(Items.WOODEN_SWORD));
+            return true;
+        }
+        return false;
+    }
+
+    private boolean craftArmorForSlot(EquipmentSlot slot) {
+        return craftArmorForSlot(slot, "any");
+    }
+
+    private boolean craftArmorForSlot(EquipmentSlot slot, String material) {
+        String requestedMaterial = material == null || material.isBlank() ? "any" : material.toLowerCase(Locale.ROOT);
+        int diamondNeeded = switch (slot) {
+            case CHEST -> 8; case LEGS -> 7; case HEAD -> 5; case FEET -> 4; default -> 0;
+        };
+        if ((requestedMaterial.equals("any") || requestedMaterial.contains("diamond")) && diamondNeeded > 0 && removeItem(Items.DIAMOND, diamondNeeded)) {
+            companion.addToInventory(new ItemStack(switch (slot) {
+                case CHEST -> Items.DIAMOND_CHESTPLATE;
+                case LEGS -> Items.DIAMOND_LEGGINGS;
+                case HEAD -> Items.DIAMOND_HELMET;
+                case FEET -> Items.DIAMOND_BOOTS;
+                default -> Items.AIR;
+            }));
+            return true;
+        }
+        int ironNeeded = switch (slot) {
+            case CHEST -> 8; case LEGS -> 7; case HEAD -> 5; case FEET -> 4; default -> 0;
+        };
+        if ((requestedMaterial.equals("any") || requestedMaterial.contains("iron")) && ironNeeded > 0 && removeItem(Items.IRON_INGOT, ironNeeded)) {
+            companion.addToInventory(new ItemStack(switch (slot) {
+                case CHEST -> Items.IRON_CHESTPLATE;
+                case LEGS -> Items.IRON_LEGGINGS;
+                case HEAD -> Items.IRON_HELMET;
+                case FEET -> Items.IRON_BOOTS;
+                default -> Items.AIR;
+            }));
+            return true;
+        }
+        return false;
+    }
+
+    private boolean ensureSticks(int needed) {
+        if (countItem(Items.STICK) >= needed) {
+            return true;
+        }
+        if (countItemsByPathContains("planks") < 2 && countItemsByPathContains("log") > 0) {
+            if (removeItemsByPathContains("log", 1)) {
+                companion.addToInventory(new ItemStack(Items.OAK_PLANKS, 4));
+            }
+        }
+        while (countItem(Items.STICK) < needed && countItemsByPathContains("planks") >= 2) {
+            if (!removeItemsByPathContains("planks", 2)) {
+                break;
+            }
+            companion.addToInventory(new ItemStack(Items.STICK, 4));
+        }
+        return countItem(Items.STICK) >= needed;
+    }
+
+    private int countItem(Item item) {
+        int total = 0;
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (!stack.isEmpty() && stack.getItem() == item) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
+    private int countItemsByPathContains(String token) {
+        int total = 0;
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty()) continue;
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+            if (itemId.contains(token)) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
+    private boolean removeItem(Item item, int count) {
+        if (countItem(item) < count) {
+            return false;
+        }
+        int remaining = count;
+        for (int i = 0; i < companion.getContainerSize() && remaining > 0; i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty() || stack.getItem() != item) continue;
+            int take = Math.min(remaining, stack.getCount());
+            stack.shrink(take);
+            if (stack.isEmpty()) {
+                companion.setItem(i, ItemStack.EMPTY);
+            }
+            remaining -= take;
+        }
+        return true;
+    }
+
+    private boolean removeItemsByPathContains(String token, int count) {
+        if (countItemsByPathContains(token) < count) {
+            return false;
+        }
+        int remaining = count;
+        for (int i = 0; i < companion.getContainerSize() && remaining > 0; i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty()) continue;
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+            if (!itemId.contains(token)) continue;
+            int take = Math.min(remaining, stack.getCount());
+            stack.shrink(take);
+            if (stack.isEmpty()) {
+                companion.setItem(i, ItemStack.EMPTY);
+            }
+            remaining -= take;
+        }
+        return true;
     }
 
     private void requestTeleport(String targetPlayer) {

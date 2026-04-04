@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.player.Player;
 import org.jetbrains.annotations.Nullable;
 
@@ -51,6 +52,7 @@ public final class ActionRegistry {
         doc(MOV, "{\"action\": \"stay\"}", "Parar e ficar no lugar"),
         doc(MOV, "{\"action\": \"goto\", \"x\": X, \"y\": Y, \"z\": Z}", "Ir para coordenadas específicas"),
         doc(MOV, "{\"action\": \"come\"}", "Vir até a localização do jogador"),
+        doc(MOV, "{\"action\": \"jump\"}", "Pular uma vez"),
 
         doc(COMB, "{\"action\": \"attack\", \"target\": \"zombie\"}", "Atacar um mob específico"),
         doc(COMB, "{\"action\": \"defend\"}", "Defender o jogador de inimigos"),
@@ -63,11 +65,17 @@ public final class ActionRegistry {
         doc(INV, "{\"action\": \"equip\"}", "Equipar a melhor arma do inventário"),
         doc(INV, "{\"action\": \"inventory\"}", "Relatar o conteúdo do inventário"),
         doc(INV, "{\"action\": \"give\", \"item\": \"diamond\", \"count\": X}", "Entregar itens ao jogador"),
+        doc(INV, "{\"action\": \"give\", \"item\": \"all\", \"count\": 999}", "Entregar tudo o que estiver no inventário ao jogador"),
+        doc(INV, "{\"action\": \"give\", \"item\": \"food\", \"count\": X}", "Entregar comida ao jogador"),
+        doc(INV, "{\"action\": \"deposititem\", \"item\": \"wheat\", \"count\": 1}", "Guardar um item específico no baú mais próximo"),
         doc(INV, "{\"action\": \"takefromchest\", \"item\": \"carrot\", \"count\": 1}", "Retirar um item específico de um baú próximo ou do baú indicado pelo jogador"),
         doc(INV, "{\"action\": \"takefromchest\", \"item\": \"iron\", \"count\": X}", "Pegar uma quantidade específica de um item de um baú"),
 
-        doc(ME, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME (cria se necessário)"),
-        doc(ME, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME"),
+        doc(ME, "{\"action\": \"getgear\", \"material\": \"iron\"}", "Buscar conjunto de ferro na rede ME, em baús próximos ou fabricar se possível"),
+        doc(ME, "{\"action\": \"getgear\", \"material\": \"diamond\"}", "Buscar conjunto de diamante na rede ME ou em baús próximos"),
+        doc(ME, "{\"action\": \"getgear\", \"material\": \"any\"}", "Buscar uma arma ou armadura em baús próximos, na rede ME ou fabricar se possível"),
+        doc(ME, "{\"action\": \"getgear\", \"gearType\": \"armor\", \"slot\": \"feet\"}", "Buscar botas ou peça equivalente de armadura"),
+        doc(ME, "{\"action\": \"getgear\", \"gearType\": \"weapon\", \"match\": \"sword\"}", "Buscar uma espada específica"),
         doc(ME, "{\"action\": \"deposit\"}", "Depositar todos os itens na rede ME ou em um baú próximo, mantendo o equipamento"),
         doc(ME, "{\"action\": \"deposit\", \"keepGear\": false}", "Depositar tudo, inclusive armas e armaduras"),
 
@@ -80,7 +88,7 @@ public final class ActionRegistry {
         doc(HOME, "{\"action\": \"sethome\"}", "Definir a posição atual como casa"),
         doc(HOME, "{\"action\": \"sleep\"}", "Dormir na cama mais próxima"),
 
-        doc(TP, "{\"action\": \"tpa\", \"target\": \"player\"}", "Teleportar até um jogador"),
+        doc(TP, "{\"action\": \"tpa\", \"target\": \"player\"}", "Teleportar até ou para um jogador"),
         doc(TP, "{\"action\": \"tpaccept\"}", "Aceitar pedido de teleporte"),
         doc(TP, "{\"action\": \"tpdeny\"}", "Recusar pedido de teleporte"),
 
@@ -140,6 +148,15 @@ public final class ActionRegistry {
         RESOURCE_ALIASES.put("diamond", "diamond");
         RESOURCE_ALIASES.put("ouro", "gold");
         RESOURCE_ALIASES.put("gold", "gold");
+        RESOURCE_ALIASES.put("comida", "food");
+        RESOURCE_ALIASES.put("alimento", "food");
+        RESOURCE_ALIASES.put("alimentos", "food");
+        RESOURCE_ALIASES.put("rango", "food");
+        RESOURCE_ALIASES.put("trigo", "wheat");
+        RESOURCE_ALIASES.put("wheat", "wheat");
+        RESOURCE_ALIASES.put("pao", "bread");
+        RESOURCE_ALIASES.put("pão", "bread");
+        RESOURCE_ALIASES.put("bread", "bread");
     }
 
     private static final Set<String> STORAGE_WORDS = Set.of(
@@ -289,6 +306,15 @@ public final class ActionRegistry {
             return new CompanionAction("takefromchest", null, data);
         }
 
+        String resource = extractResource(normalized);
+        if (resource != null && !resource.isBlank() && !containsAny(normalized, "guarda tudo", "deposita tudo", "esvazia")) {
+            JsonObject data = new JsonObject();
+            data.addProperty("item", resource);
+            data.addProperty("count", extractRequestedCount(normalized));
+            data.addProperty("keepGear", true);
+            return new CompanionAction("deposititem", null, data);
+        }
+
         JsonObject data = new JsonObject();
         data.addProperty("keepGear", !containsAny(normalized, "tudo", "inclusive armadura", "inclusive arma"));
         return new CompanionAction("deposit", null, data);
@@ -388,6 +414,69 @@ public final class ActionRegistry {
         return null;
     }
 
+    private static @Nullable EquipmentSlot resolveRequestedArmorSlot(String normalized) {
+        if (containsAny(normalized, "capacete", "helmet", "elmo")) {
+            return EquipmentSlot.HEAD;
+        }
+        if (containsAny(normalized, "peitoral", "chestplate", "couraca", "couracas")) {
+            return EquipmentSlot.CHEST;
+        }
+        if (containsAny(normalized, "calca", "calcas", "leggings", "legging", "perneira", "perneiras")) {
+            return EquipmentSlot.LEGS;
+        }
+        if (containsAny(normalized, "bota", "botas", "boots", "boot", "sapato", "sapatos")) {
+            return EquipmentSlot.FEET;
+        }
+        return null;
+    }
+
+    private static @Nullable CompanionAction buildGearAction(String action, String normalized) {
+        JsonObject data = new JsonObject();
+        String material = containsAny(normalized, "diamante", "diamond") ? "diamond" : containsAny(normalized, "ferro", "iron") ? "iron" : "any";
+        data.addProperty("material", material);
+
+        EquipmentSlot slot = resolveRequestedArmorSlot(normalized);
+        if (slot != null) {
+            data.addProperty("gearType", "armor");
+            data.addProperty("slot", slot.getName());
+            return new CompanionAction(action, null, data);
+        }
+
+        if (containsAny(normalized, "armadura", "armor", "equipamento")) {
+            data.addProperty("gearType", "armor");
+            return new CompanionAction(action, null, data);
+        }
+
+        if (containsAny(normalized, "espada", "sword")) {
+            data.addProperty("gearType", "weapon");
+            data.addProperty("match", "sword");
+            return new CompanionAction(action, null, data);
+        }
+
+        if (containsAny(normalized, "machado", "axe")) {
+            data.addProperty("gearType", "weapon");
+            data.addProperty("match", "axe");
+            return new CompanionAction(action, null, data);
+        }
+
+        if (containsAny(normalized, "arma", "weapon")) {
+            data.addProperty("gearType", "weapon");
+            return new CompanionAction(action, null, data);
+        }
+
+        if (containsAny(normalized, "luva", "luvas", "glove", "gloves", "gauntlet", "gauntlets", "manopla", "manoplas")) {
+            data.addProperty("gearType", "item");
+            data.addProperty("match", "glove");
+            return new CompanionAction(action, null, data);
+        }
+
+        if (action.equals("equip")) {
+            return new CompanionAction(action, null);
+        }
+        data.addProperty("gearType", "any");
+        return new CompanionAction(action, null, data);
+    }
+
     private static @Nullable CompanionAction tryResolveMovementCommand(
         String normalized
     ) {
@@ -433,6 +522,13 @@ public final class ActionRegistry {
             )
         ) {
             return new CompanionAction("come", null);
+        }
+
+        if (
+            normalized.equals("pula") || normalized.equals("pule") || normalized.equals("salta") || normalized.equals("salte") ||
+            containsAny(normalized, "da um pulo", "dá um pulo", "pula aqui", "pule aqui")
+        ) {
+            return new CompanionAction("jump", null);
         }
 
         if (
@@ -507,11 +603,35 @@ public final class ActionRegistry {
                 "equipa o ",
                 "equipe um ",
                 "equipe uma ",
+                "equipe o ",
                 "usa sua melhor arma ",
-                "pega sua melhor arma "
+                "pega sua melhor arma ",
+                "equipa uma arma ",
+                "equipe uma arma ",
+                "equipa a espada ",
+                "equipe a espada ",
+                "usa uma arma ",
+                "use uma arma ",
+                "equipa uma bota ",
+                "equipa botas ",
+                "equipa um peitoral ",
+                "equipa um capacete ",
+                "equipa uma calca ",
+                "equipa uma calca ",
+                "equipa uma luva "
             )
         ) {
-            return new CompanionAction("equip", null);
+            return buildGearAction("equip", normalized);
+        }
+
+        if (containsAny(normalized,
+                "pega uma armadura", "pegue uma armadura", "arranja uma armadura", "busca uma armadura",
+                "pega um equipamento", "pegue um equipamento", "traz uma armadura", "quero uma armadura",
+                "pega uma bota", "pegue uma bota", "pega botas", "pegue botas",
+                "pega uma luva", "pegue uma luva", "pega luvas", "pegue luvas",
+                "pega um peitoral", "pegue um peitoral", "pega um capacete", "pegue um capacete",
+                "pega uma espada", "pegue uma espada", "pega uma arma", "pegue uma arma")) {
+            return buildGearAction("getgear", normalized);
         }
 
         if (containsAny(normalized, "dorme", "vai dormir", "deita na cama")) {
@@ -636,14 +756,50 @@ public final class ActionRegistry {
             return null;
         }
 
+        if (containsAny(
+            normalized,
+            "me da tudo",
+            "me dá tudo",
+            "me de tudo",
+            "me dê tudo",
+            "me passa tudo",
+            "me entregue tudo",
+            "tudo o que voce tem",
+            "tudo que voce tem",
+            "tudo o que vc tem",
+            "tudo que vc tem",
+            "seus recursos",
+            "seus itens",
+            "seu inventario",
+            "seu inventário",
+            "todo seu inventario",
+            "todo seu inventário"
+        )) {
+            JsonObject data = new JsonObject();
+            data.addProperty("item", "all");
+            data.addProperty("count", 999);
+            return new CompanionAction("give", null, data);
+        }
+
         String item = resolveSingleResource(normalized);
+        if (item == null && containsAny(normalized, "comida", "alimento", "alimentos", "food", "rango")) {
+            item = "food";
+        }
+        if (item == null && containsAny(normalized, "recurso", "recursos", "itens", "items", "inventario", "inventário")) {
+            item = "all";
+        }
         if (item == null) {
             return null;
         }
 
+        int count = extractRequestedCount(normalized);
+        if (item.equals("food") || item.equals("all") || containsAny(normalized, "todas as", "todos os", "todo o", "toda a", "tudo de")) {
+            count = 999;
+        }
+
         JsonObject data = new JsonObject();
         data.addProperty("item", item);
-        data.addProperty("count", extractRequestedCount(normalized));
+        data.addProperty("count", count);
         return new CompanionAction("give", null, data);
     }
 
@@ -738,6 +894,9 @@ public final class ActionRegistry {
         }
         if (containsWord(normalized, "um") || containsWord(normalized, "uma")) {
             return 1;
+        }
+        if (containsAny(normalized, "todas as", "todos os", "todo o", "toda a")) {
+            return 999;
         }
         if (
             containsAny(

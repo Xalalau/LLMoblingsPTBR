@@ -395,7 +395,7 @@ public class CompanionPersonality {
         if (random.nextInt(1200) == 0 && interactionCooldown <= 0) {
             doPlayerInteraction();
         }
-        if (random.nextInt(2000) == 0 && jokeCooldown <= 0) {
+        if (random.nextInt(8000) == 0 && jokeCooldown <= 0) {
             tellJoke();
         }
         if (random.nextInt(600) == 0 && emoteCooldown <= 0) {
@@ -624,7 +624,7 @@ public class CompanionPersonality {
         }
 
         say(joke);
-        jokeCooldown = 2400;
+        jokeCooldown = 9600;
     }
 
     private void doPlayerInteraction() {

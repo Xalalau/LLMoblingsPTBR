@@ -61,6 +61,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
     private ItemStack offhandItem = ItemStack.EMPTY;
     private int selectedSlot = 0;
     private long lastManualEatTick = -200;
+    private int suppressAutoEquipUntilTick = 0;
 
     // AI Controller
     private CompanionAI aiController;
@@ -125,7 +126,7 @@ public class CompanionEntity extends PathfinderMob implements Container {
             }
 
             // Auto-equip best items (every 3 seconds)
-            if (this.tickCount % 60 == 0) {
+            if (this.tickCount % 60 == 0 && this.tickCount >= suppressAutoEquipUntilTick) {
                 autoEquipBestItems();
             }
 
@@ -675,6 +676,14 @@ public class CompanionEntity extends PathfinderMob implements Container {
                 }
             }
         }
+    }
+
+
+    public void suppressAutoEquipForTicks(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        suppressAutoEquipUntilTick = Math.max(suppressAutoEquipUntilTick, this.tickCount + ticks);
     }
 
     private float getItemDamage(ItemStack stack) {

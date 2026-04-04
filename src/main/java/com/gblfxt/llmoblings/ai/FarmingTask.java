@@ -7,7 +7,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -27,11 +30,13 @@ public class FarmingTask {
     private String failReason = null;
 
     private @Nullable BlockPos currentCrop = null;
+    private @Nullable BlockPos currentFarmland = null;
     private @Nullable BlockPos explorationTarget = null;
     private int explorationStep = 0;
     private int ticksMoving = 0;
     private int ticksWithoutHarvest = 0;
     private int harvestedCount = 0;
+    private int plantedCount = 0;
     private int failedCropAttempts = 0;
 
     private static final int MAX_EXPLORATION_STEPS = 8;
@@ -70,10 +75,16 @@ public class FarmingTask {
         if (currentCrop != null && !UltimineHelper.isMatureCrop(serverLevel.getBlockState(currentCrop))) {
             currentCrop = null;
         }
+        if (currentFarmland != null && !isEmptyFarmland(serverLevel, currentFarmland)) {
+            currentFarmland = null;
+        }
 
-        if (currentCrop == null) {
+        if (currentCrop == null && currentFarmland == null) {
             currentCrop = WorldQueries.findNearestMatureCrop(serverLevel, companion, companion.blockPosition(), radius);
-            if (currentCrop == null) {
+            if (currentCrop == null && hasPlantableSeed()) {
+                currentFarmland = findNearestEmptyFarmland(serverLevel, companion.blockPosition());
+            }
+            if (currentCrop == null && currentFarmland == null) {
                 ticksWithoutHarvest++;
                 if (handleExploration(serverLevel)) {
                     return;
@@ -85,30 +96,53 @@ public class FarmingTask {
             ticksMoving = 0;
         }
 
-        double distance = companion.position().distanceTo(Vec3.atCenterOf(currentCrop));
-        if (distance > REACH_DISTANCE) {
-            moveTo(currentCrop);
-            return;
-        }
+        if (currentCrop != null) {
+            double distance = companion.position().distanceTo(Vec3.atCenterOf(currentCrop));
+            if (distance > REACH_DISTANCE) {
+                moveTo(currentCrop);
+                return;
+            }
 
-        if (!ChunkLoadingManager.isBlockInLoadedChunks(companion, currentCrop)) {
+            if (!ChunkLoadingManager.isBlockInLoadedChunks(companion, currentCrop)) {
+                currentCrop = null;
+                return;
+            }
+
+            boolean success = UltimineHelper.harvestAndReplant(serverLevel, currentCrop, companion);
+            if (success) {
+                harvestedCount++;
+                ticksWithoutHarvest = 0;
+                failedCropAttempts = 0;
+                pickupNearbyDrops();
+            } else {
+                failedCropAttempts++;
+                if (failedCropAttempts >= 5) {
+                    completed = true;
+                }
+            }
             currentCrop = null;
             return;
         }
 
-        boolean success = UltimineHelper.harvestAndReplant(serverLevel, currentCrop, companion);
-        if (success) {
-            harvestedCount++;
-            ticksWithoutHarvest = 0;
-            failedCropAttempts = 0;
-            pickupNearbyDrops();
-        } else {
-            failedCropAttempts++;
-            if (failedCropAttempts >= 5) {
-                completed = true;
+        if (currentFarmland != null) {
+            double distance = companion.position().distanceTo(Vec3.atCenterOf(currentFarmland));
+            if (distance > REACH_DISTANCE) {
+                moveTo(currentFarmland);
+                return;
             }
+
+            if (plantAt(serverLevel, currentFarmland)) {
+                plantedCount++;
+                ticksWithoutHarvest = 0;
+                failedCropAttempts = 0;
+            } else {
+                failedCropAttempts++;
+                if (failedCropAttempts >= 5 && !handleExploration(serverLevel)) {
+                    completed = true;
+                }
+            }
+            currentFarmland = null;
         }
-        currentCrop = null;
     }
 
     private void moveTo(BlockPos target) {
@@ -118,13 +152,14 @@ public class FarmingTask {
         ticksMoving++;
         if (ticksMoving > MOVE_TIMEOUT_TICKS) {
             currentCrop = null;
+            currentFarmland = null;
             ticksMoving = 0;
         }
     }
 
     private boolean handleExploration(ServerLevel serverLevel) {
         WorldQueries.CropSummary cropSummary = WorldQueries.summarizeCrops(serverLevel, companion, farmOrigin, radius);
-        if (cropSummary.matureCrops() == 0 && cropSummary.emptyFarmland() == 0) {
+        if (cropSummary.matureCrops() == 0 && (cropSummary.emptyFarmland() == 0 || !hasPlantableSeed())) {
             return false;
         }
 
@@ -244,6 +279,86 @@ public class FarmingTask {
         return remainder;
     }
 
+
+    private boolean hasPlantableSeed() {
+        return findPlantableSeedSlot(null) >= 0;
+    }
+
+    private @Nullable BlockPos findNearestEmptyFarmland(ServerLevel level, BlockPos center) {
+        BlockPos nearest = null;
+        double nearestDist = Double.MAX_VALUE;
+        for (int x = -radius; x <= radius; x++) {
+            for (int y = -2; y <= 2; y++) {
+                for (int z = -radius; z <= radius; z++) {
+                    BlockPos pos = center.offset(x, y, z);
+                    if (!ChunkLoadingManager.isBlockInLoadedChunks(companion, pos)) {
+                        continue;
+                    }
+                    if (!isEmptyFarmland(level, pos)) {
+                        continue;
+                    }
+                    if (findPlantableSeedSlot(pos) < 0) {
+                        continue;
+                    }
+                    double dist = companion.blockPosition().distSqr(pos);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearest = pos;
+                    }
+                }
+            }
+        }
+        return nearest;
+    }
+
+    private boolean isEmptyFarmland(ServerLevel level, BlockPos pos) {
+        return level.getBlockState(pos).is(Blocks.FARMLAND) && level.getBlockState(pos.above()).isAir();
+    }
+
+    private int findPlantableSeedSlot(@Nullable BlockPos farmlandPos) {
+        for (int i = 0; i < companion.getContainerSize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
+                continue;
+            }
+            String itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+            boolean looksLikeSeed = itemId.contains("seed") || itemId.contains("carrot") || itemId.contains("potato") || itemId.contains("beetroot") || itemId.contains("wart");
+            if (!looksLikeSeed) {
+                continue;
+            }
+            BlockState plantState = blockItem.getBlock().defaultBlockState();
+            if (farmlandPos == null || plantState.canSurvive(companion.level(), farmlandPos.above())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean plantAt(ServerLevel level, BlockPos farmlandPos) {
+        if (!isEmptyFarmland(level, farmlandPos)) {
+            return false;
+        }
+        int slot = findPlantableSeedSlot(farmlandPos);
+        if (slot < 0) {
+            return false;
+        }
+        ItemStack stack = companion.getItem(slot);
+        if (!(stack.getItem() instanceof BlockItem blockItem)) {
+            return false;
+        }
+        BlockState plantState = blockItem.getBlock().defaultBlockState();
+        BlockPos plantPos = farmlandPos.above();
+        if (!plantState.canSurvive(level, plantPos)) {
+            return false;
+        }
+        if (level.setBlockAndUpdate(plantPos, plantState)) {
+            stack.shrink(1);
+            companion.setItem(slot, stack.isEmpty() ? ItemStack.EMPTY : stack);
+            return true;
+        }
+        return false;
+    }
+
     public boolean isCompleted() {
         return completed;
     }
@@ -260,10 +375,17 @@ public class FarmingTask {
         return harvestedCount;
     }
 
+    public int getPlantedCount() {
+        return plantedCount;
+    }
+
     public String getProgressReport() {
         if (currentCrop != null) {
-            return "Estou cuidando da fazenda. Já colhi " + harvestedCount + " colheitas e agora vou até o próximo canteiro.";
+            return "Estou cuidando da fazenda. Já colhi " + harvestedCount + " e plantei " + plantedCount + ". Agora vou até o próximo canteiro.";
         }
-        return "Estou cuidando da fazenda. Já colhi " + harvestedCount + " colheitas até agora.";
+        if (currentFarmland != null) {
+            return "Estou cuidando da fazenda. Já colhi " + harvestedCount + " e plantei " + plantedCount + ". Agora vou plantar no espaço vazio.";
+        }
+        return "Estou cuidando da fazenda. Já colhi " + harvestedCount + " e plantei " + plantedCount + " até agora.";
     }
 }

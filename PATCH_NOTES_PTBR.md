@@ -94,3 +94,6 @@ Se aparecer algum erro de compilação, o ponto mais provável é alguma string 
 
 ## Observação
 - A compilação não foi validada neste ambiente porque o Gradle Wrapper tentou baixar a distribuição do Gradle da internet e a rede externa não estava disponível.
+
+
+- v12 backport: MovementRecoveryController separado e integrado ao CompanionAI do pacote v11.
