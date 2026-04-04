@@ -5,6 +5,7 @@ import com.gblfxt.llmoblings.LLMoblings;
 import com.gblfxt.llmoblings.compat.AE2Integration;
 import com.gblfxt.llmoblings.entity.CompanionEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -51,6 +52,11 @@ public class MiningTask {
     private static final int MAX_EXPLORATION_STEPS = 12;
     private static final int EXPLORATION_TIMEOUT_TICKS = 240;
     private static final int EXPLORATION_REACH_DISTANCE = 6;
+    private static final Set<Block> SOFT_COVER_BLOCKS = Set.of(
+            Blocks.DIRT, Blocks.GRASS_BLOCK, Blocks.COARSE_DIRT, Blocks.ROOTED_DIRT,
+            Blocks.PODZOL, Blocks.MYCELIUM, Blocks.GRAVEL, Blocks.SAND, Blocks.RED_SAND
+    );
+
 
     // Block types that match the request
     private final Set<Block> targetBlocks = new HashSet<>();
@@ -69,6 +75,7 @@ public class MiningTask {
     private boolean isTreeFelling = false;
     private boolean hasEquippedTool = false;
     private boolean toolCheckDone = false;
+    private boolean auxiliaryTargetActive = false;
 
     // ME network access for tool retrieval
     private BlockPos meAccessPoint = null;
@@ -339,13 +346,24 @@ public class MiningTask {
             return;
         }
 
+        // If the requested block is covered by removable terrain, clear the cover first.
+        if (currentTarget != null && prepareCoveredTarget(currentTarget)) {
+            return;
+        }
+
+        // If there is a removable block between the companion and the target, clear it first.
+        if (currentTarget != null && prepareFrontObstacle(currentTarget)) {
+            return;
+        }
+
         // Get next target from queue or find new one
-        if (currentTarget == null || !isValidTarget(currentTarget)) {
+        if (currentTarget == null || !isCurrentTargetMineable()) {
             // Try to get from queue first
             while (!miningQueue.isEmpty()) {
                 BlockPos queued = miningQueue.poll();
                 if (isValidTarget(queued) && isSafeToMine(queued)) {
                     currentTarget = queued;
+                    auxiliaryTargetActive = false;
                     break;
                 }
             }
@@ -353,6 +371,7 @@ public class MiningTask {
             // If queue is empty, find a new vein/tree
             if (currentTarget == null) {
                 currentTarget = findNearestTargetBlock();
+                auxiliaryTargetActive = false;
                 miningProgress = 0;
                 ticksAtCurrentBlock = 0;
                 isVeinMining = false;
@@ -473,6 +492,7 @@ public class MiningTask {
                         companion.getCompanionName(), currentTarget, state.getBlock());
                 }
                 currentTarget = null;
+                auxiliaryTargetActive = false;
                 miningProgress = 0;
 
                 // Log progress for veins/trees
@@ -488,6 +508,7 @@ public class MiningTask {
             LLMoblings.LOGGER.debug("Mining timeout, skipping block at {}", currentTarget);
             clearBreakAnimation();
             currentTarget = null;
+            auxiliaryTargetActive = false;
             miningProgress = 0;
             ticksAtCurrentBlock = 0;
         }
@@ -651,6 +672,48 @@ public class MiningTask {
         return false;
     }
 
+
+    private boolean prepareCoveredTarget(BlockPos target) {
+        BlockPos coverPos = findCoveringBlock(target);
+        if (coverPos == null) {
+            return false;
+        }
+
+        BlockState coverState = companion.level().getBlockState(coverPos);
+        if (!isValidTarget(coverPos) && SOFT_COVER_BLOCKS.contains(coverState.getBlock())) {
+            if (!target.equals(coverPos)) {
+                miningQueue.offer(target);
+            }
+            currentTarget = coverPos;
+            auxiliaryTargetActive = true;
+            miningProgress = 0;
+            ticksAtCurrentBlock = 0;
+            toolCheckDone = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private BlockPos findCoveringBlock(BlockPos target) {
+        BlockPos cursor = target.above();
+        for (int depth = 0; depth < 2; depth++) {
+            BlockState coverState = companion.level().getBlockState(cursor);
+            if (coverState.isAir()) {
+                return null;
+            }
+            if (SOFT_COVER_BLOCKS.contains(coverState.getBlock())) {
+                return cursor;
+            }
+            if (coverState.canBeReplaced()) {
+                cursor = cursor.above();
+                continue;
+            }
+            return null;
+        }
+        return null;
+    }
+
     private BlockPos findNearestTargetBlock() {
         BlockPos companionPos = companion.blockPosition();
         BlockPos nearest = null;
@@ -743,8 +806,120 @@ public class MiningTask {
         return nearest;
     }
 
+    private boolean isCurrentTargetMineable() {
+        if (currentTarget == null) {
+            return false;
+        }
+
+        BlockState state = companion.level().getBlockState(currentTarget);
+        if (state.isAir()) {
+            return false;
+        }
+
+        if (auxiliaryTargetActive) {
+            return isObstacleWorthClearing(currentTarget, state)
+                    || SOFT_COVER_BLOCKS.contains(state.getBlock());
+        }
+
+        return isValidTarget(currentTarget);
+    }
+
     private boolean isReachable(BlockPos pos) {
-        return findBestStandPosition(pos) != null;
+        return findBestStandPosition(pos) != null || findFrontObstacle(pos) != null;
+    }
+
+    private boolean prepareFrontObstacle(BlockPos target) {
+        BlockPos obstaclePos = findFrontObstacle(target);
+        if (obstaclePos == null) {
+            return false;
+        }
+
+        BlockState obstacleState = companion.level().getBlockState(obstaclePos);
+        if (obstacleState.isAir() || !isObstacleWorthClearing(obstaclePos, obstacleState)) {
+            return false;
+        }
+
+        if (!obstaclePos.equals(currentTarget)) {
+            if (!target.equals(obstaclePos)) {
+                miningQueue.offer(target);
+            }
+            currentTarget = obstaclePos;
+            auxiliaryTargetActive = true;
+            miningProgress = 0;
+            ticksAtCurrentBlock = 0;
+            toolCheckDone = false;
+        }
+        return true;
+    }
+
+    private BlockPos findFrontObstacle(BlockPos target) {
+        BlockPos companionFeet = companion.blockPosition();
+        Direction preferred = Direction.getNearest(
+            companion.getX() - (target.getX() + 0.5),
+            0.0,
+            companion.getZ() - (target.getZ() + 0.5)
+        );
+
+        if (preferred.getAxis().isHorizontal()) {
+            BlockPos preferredObstacle = evaluateFrontObstacle(target, companionFeet, preferred);
+            if (preferredObstacle != null) {
+                return preferredObstacle;
+            }
+        }
+
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos obstaclePos = evaluateFrontObstacle(target, companionFeet, direction);
+            if (obstaclePos == null) {
+                continue;
+            }
+            double dist = companion.position().distanceToSqr(Vec3.atCenterOf(obstaclePos));
+            if (dist < bestDistance) {
+                bestDistance = dist;
+                best = obstaclePos;
+            }
+        }
+        return best;
+    }
+
+    private BlockPos evaluateFrontObstacle(BlockPos target, BlockPos companionFeet, Direction direction) {
+        BlockPos obstaclePos = target.relative(direction);
+        BlockPos standPos = obstaclePos.relative(direction);
+        BlockState obstacleState = companion.level().getBlockState(obstaclePos);
+
+        if (obstacleState.isAir() || obstacleState.canBeReplaced()) {
+            return null;
+        }
+        if (!isObstacleWorthClearing(obstaclePos, obstacleState)) {
+            return null;
+        }
+        if (canStandAt(standPos) || companionFeet.equals(standPos) || companionFeet.equals(standPos.above())) {
+            return obstaclePos;
+        }
+        return null;
+    }
+
+    private boolean isObstacleWorthClearing(BlockPos pos, BlockState state) {
+        if (targetBlocks.contains(state.getBlock()) && wouldYieldRequestedItem(pos, state)) {
+            return false;
+        }
+        if (companion.level().getBlockEntity(pos) != null) {
+            return false;
+        }
+
+        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+        if (SOFT_COVER_BLOCKS.contains(state.getBlock())) {
+            return true;
+        }
+        if (blockId.equals("stone") || blockId.equals("cobblestone") || blockId.equals("deepslate")
+                || blockId.equals("cobbled_deepslate") || blockId.equals("netherrack")
+                || blockId.endsWith("_log") || blockId.endsWith("_wood")
+                || blockId.endsWith("_stem") || blockId.endsWith("_hyphae")) {
+            return isSafeToMine(pos);
+        }
+
+        return false;
     }
 
     private BlockPos findBestStandPosition(BlockPos target) {
