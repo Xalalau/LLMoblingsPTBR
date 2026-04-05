@@ -175,7 +175,7 @@ public class CompanionAI {
             return;
         }
 
-        sendMessageToAll("Pensando...");
+        sendMessageTo(sender, "Pensando...");
 
         if (Config.ACTION_LOOP_ENABLED.get()) {
             processMessageWithLoop(message, sender);
@@ -444,15 +444,17 @@ public class CompanionAI {
         String contextMessage = "[Um jogador chamado " + stranger.getName().getString() +
                 " (não é meu dono) disse: " + message + ". Eu devo ser amigável, mas só aceito comandos do meu dono.]";
 
-        sendMessageToAll("Hm?");
+        sendMessageTo(stranger, "Hm?");
         pendingAction = ollamaClient.chat(contextMessage);
     }
 
     private void sendMessageTo(Player player, String message) {
-        if (player != null && Config.BROADCAST_COMPANION_CHAT.get()) {
-            String formatted = "[" + companion.getCompanionName() + "] " + message;
-            player.sendSystemMessage(Component.literal(formatted));
+        if (player == null) {
+            return;
         }
+
+        String formatted = "[" + companion.getCompanionName() + "] " + message;
+        player.sendSystemMessage(Component.literal(formatted));
     }
 
     private ActionResult executeAction(CompanionAction action) {
@@ -644,13 +646,21 @@ public class CompanionAI {
             }
             case "deposit", "store", "stash", "putaway" -> {
                 boolean keepGear = action.getBoolean("keepGear", true);
-                depositItems(keepGear);
+                boolean preferSenderChest = action.getBoolean("preferSenderChest", false);
+                BlockPos referencePos = action.has("x") && action.has("y") && action.has("z")
+                        ? new BlockPos(action.getInt("x", (int) companion.getX()), action.getInt("y", (int) companion.getY()), action.getInt("z", (int) companion.getZ()))
+                        : null;
+                depositItems(keepGear, referencePos, preferSenderChest);
                 return ActionResult.terminal("deposit", "Depositando itens");
             }
             case "deposititem", "putinchest", "storeitem" -> {
                 String item = action.getString("item", "");
                 int count = action.getInt("count", 1);
-                depositSpecificItems(item, count);
+                boolean preferSenderChest = action.getBoolean("preferSenderChest", false);
+                BlockPos referencePos = action.has("x") && action.has("y") && action.has("z")
+                        ? new BlockPos(action.getInt("x", (int) companion.getX()), action.getInt("y", (int) companion.getY()), action.getInt("z", (int) companion.getZ()))
+                        : null;
+                depositSpecificItems(item, count, referencePos, preferSenderChest);
                 return ActionResult.terminal("deposititem", "Guardando item específico");
             }
             case "build" -> {
@@ -702,6 +712,12 @@ public class CompanionAI {
 
         double distance = companion.distanceTo(followTarget);
         double followDist = Config.COMPANION_FOLLOW_DISTANCE.get();
+
+        if (distance <= followDist + 1.0D) {
+            companion.getNavigation().stop();
+            movementRecovery.reset();
+            return;
+        }
 
         if (movementRecovery.tickTowardsEntity(followTarget, true)) {
             return;
@@ -2726,6 +2742,10 @@ public class CompanionAI {
     }
 
     private void depositItems(boolean keepGear) {
+        depositItems(keepGear, null, false);
+    }
+
+    private void depositItems(boolean keepGear, @Nullable BlockPos referencePos, boolean preferReferenceStorage) {
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
             sendMessage("Tem algo errado com o mundo...");
             return;
@@ -2744,6 +2764,14 @@ public class CompanionAI {
             return;
         }
 
+        if (preferReferenceStorage && referencePos != null) {
+            BlockPos nearbyReferenceChest = findNearbyChest(serverLevel, referencePos, 8);
+            if (nearbyReferenceChest != null) {
+                startDepositVisit(serverLevel, nearbyReferenceChest, false, keepGear, null, -1, "Achei um baú perto de você. Vou depositar os itens lá...");
+                return;
+            }
+        }
+
         // First try ME network
         if (AE2Integration.isAE2Loaded()) {
             List<BlockPos> meTerminals = AE2Integration.findMEAccessPoints(
@@ -2757,7 +2785,7 @@ public class CompanionAI {
         }
 
         // Try regular chests
-        BlockPos chest = findNearbyChest(serverLevel, 16);
+        BlockPos chest = findNearbyChest(serverLevel, referencePos != null ? referencePos : companion.blockPosition(), 16);
         if (chest != null) {
             startDepositVisit(serverLevel, chest, false, keepGear, null, -1, "Encontrei um baú! Vou depositar os itens...");
             return;
@@ -2773,18 +2801,27 @@ public class CompanionAI {
     private record ChestRetrievalRequest(BlockPos storagePos, BlockPos approachPos, String itemName, int count) {}
 
     private BlockPos findNearbyChest(ServerLevel level, int radius) {
-        BlockPos center = companion.blockPosition();
+        return findNearbyChest(level, companion.blockPosition(), radius);
+    }
+
+    private BlockPos findNearbyChest(ServerLevel level, BlockPos center, int radius) {
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
         for (int x = -radius; x <= radius; x++) {
             for (int y = -3; y <= 3; y++) {
                 for (int z = -radius; z <= radius; z++) {
                     BlockPos pos = center.offset(x, y, z);
                     if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.BaseContainerBlockEntity) {
-                        return pos;
+                        double distance = pos.distSqr(center);
+                        if (distance < bestDistance) {
+                            bestDistance = distance;
+                            best = pos.immutable();
+                        }
                     }
                 }
             }
         }
-        return null;
+        return best;
     }
 
     private BlockPos findStorageApproachPos(BlockPos storagePos) {
@@ -3088,6 +3125,10 @@ public class CompanionAI {
     }
 
     private void depositSpecificItems(String itemName, int count) {
+        depositSpecificItems(itemName, count, null, false);
+    }
+
+    private void depositSpecificItems(String itemName, int count, @Nullable BlockPos referencePos, boolean preferReferenceChest) {
         if (!(companion.level() instanceof ServerLevel serverLevel)) {
             sendMessage("Tem algo errado com o mundo...");
             return;
@@ -3096,13 +3137,19 @@ public class CompanionAI {
             sendMessage("Qual item eu devo guardar no baú?");
             return;
         }
-        BlockPos chest = findNearbyChest(serverLevel, 16);
+        BlockPos searchCenter = referencePos != null ? referencePos : companion.blockPosition();
+        BlockPos chest = findNearbyChest(serverLevel, searchCenter, preferReferenceChest ? 8 : 16);
+        if (chest == null && preferReferenceChest && referencePos != null) {
+            chest = findNearbyChest(serverLevel, companion.blockPosition(), 16);
+        }
         if (chest == null) {
             sendMessage("Eu não encontrei nenhum baú próximo para guardar " + itemName + ".");
             return;
         }
-        startDepositVisit(serverLevel, chest, false, true, itemName, Math.max(1, count),
-                "Indo guardar " + itemName + " no baú mais próximo.");
+        String initialMessage = preferReferenceChest && referencePos != null
+                ? "Indo guardar " + itemName + " no baú perto de você."
+                : "Indo guardar " + itemName + " no baú mais próximo.";
+        startDepositVisit(serverLevel, chest, false, true, itemName, Math.max(1, count), initialMessage);
     }
 
     private void retrieveItemsFromChest(String itemName, int count, BlockPos referencePos, boolean preferReferenceChest) {
@@ -3679,30 +3726,38 @@ public class CompanionAI {
     }
 
     private void sendMessage(String message) {
-        sendMessageToAll(message);
+        Player recipient = (commandGiver != null && commandGiver.isAlive()) ? commandGiver : companion.getOwner();
+        sendMessageTo(recipient, message);
+        sendMessageToNearbyExcept(message, recipient);
     }
 
     /**
-     * Send message to all nearby players.
+     * Send message to nearby players except an optional direct recipient.
      */
-    private void sendMessageToAll(String message) {
-        if (!Config.BROADCAST_COMPANION_CHAT.get()) return;
+    private void sendMessageToNearbyExcept(String message, @Nullable Player except) {
+        if (!Config.BROADCAST_COMPANION_CHAT.get()) {
+            return;
+        }
 
         String formatted = "[" + companion.getCompanionName() + "] " + message;
         Component component = Component.literal(formatted);
 
-        // Send to all players within 64 blocks
         List<Player> nearbyPlayers = companion.level().getEntitiesOfClass(
                 Player.class,
                 companion.getBoundingBox().inflate(64),
                 Player::isAlive
         );
 
+        int sentCount = 0;
         for (Player player : nearbyPlayers) {
+            if (except != null && player.getUUID().equals(except.getUUID())) {
+                continue;
+            }
             player.sendSystemMessage(component);
+            sentCount++;
         }
 
-        LLMoblings.LOGGER.debug("[{}] Broadcast to {} players: {}", companion.getCompanionName(), nearbyPlayers.size(), message);
+        LLMoblings.LOGGER.debug("[{}] Broadcast to {} nearby players: {}", companion.getCompanionName(), sentCount, message);
     }
 
     public AIState getCurrentState() {

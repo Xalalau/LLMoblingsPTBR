@@ -68,6 +68,8 @@ public class CompanionEntity extends PathfinderMob implements Container {
 
     public CompanionEntity(EntityType<? extends CompanionEntity> type, Level level) {
         super(type, level);
+        this.setPersistenceRequired();
+        this.setCustomNameVisible(true);
         // Step height is set via entity type attributes in 1.21.1
         if (!level.isClientSide) {
             this.aiController = new CompanionAI(this);
@@ -112,6 +114,14 @@ public class CompanionEntity extends PathfinderMob implements Container {
         super.tick();
 
         if (!this.level().isClientSide) {
+            if (!getCompanionName().isBlank()) {
+                Component expectedName = Component.literal(getCompanionName());
+                if (this.getCustomName() == null || !getCompanionName().equals(this.getCustomName().getString()) || !this.isCustomNameVisible()) {
+                    this.setCustomName(expectedName);
+                    this.setCustomNameVisible(true);
+                }
+            }
+
             // Tick AI controller
             if (aiController != null) {
                 aiController.tick();
@@ -761,6 +771,14 @@ public class CompanionEntity extends PathfinderMob implements Container {
     // Name management
     public void setCompanionName(String name) {
         this.entityData.set(DATA_NAME, name);
+        if (name == null || name.isBlank()) {
+            this.setCustomName(null);
+            this.setCustomNameVisible(false);
+        } else {
+            Component component = Component.literal(name);
+            this.setCustomName(component);
+            this.setCustomNameVisible(true);
+        }
     }
 
     public String getCompanionName() {
@@ -777,6 +795,12 @@ public class CompanionEntity extends PathfinderMob implements Container {
     public Component getDisplayName() {
         String name = getCompanionName();
         return name.isEmpty() ? super.getDisplayName() : Component.literal(name);
+    }
+
+
+    @Override
+    public boolean removeWhenFarAway(double distanceToClosestPlayer) {
+        return false;
     }
 
     // Skin URL
@@ -927,6 +951,8 @@ public class CompanionEntity extends PathfinderMob implements Container {
 
         setCompanionName(tag.getString("CompanionName"));
         setSkinUrl(tag.getString("SkinUrl"));
+        this.setPersistenceRequired();
+        this.setCustomNameVisible(!getCompanionName().isBlank());
         selectedSlot = tag.getInt("SelectedSlot");
 
         if (tag.hasUUID("Owner")) {

@@ -14,7 +14,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.ArrayList;
 import java.util.List;
+import org.jetbrains.annotations.Nullable;
 
 public class CompanionCommand {
 
@@ -51,11 +53,7 @@ public class CompanionCommand {
         }
 
         // Check companion limit
-        List<CompanionEntity> existing = player.level().getEntitiesOfClass(
-                CompanionEntity.class,
-                player.getBoundingBox().inflate(256),
-                c -> c.isOwner(player)
-        );
+        List<CompanionEntity> existing = findOwnedCompanions(player, null);
 
         int maxCompanions = Config.MAX_COMPANIONS_PER_PLAYER.get();
         if (existing.size() >= maxCompanions) {
@@ -109,11 +107,7 @@ public class CompanionCommand {
             return 0;
         }
 
-        List<CompanionEntity> companions = player.level().getEntitiesOfClass(
-                CompanionEntity.class,
-                player.getBoundingBox().inflate(256),
-                c -> c.isOwner(player) && c.getCompanionName().equalsIgnoreCase(name)
-        );
+        List<CompanionEntity> companions = findOwnedCompanions(player, name);
 
         if (companions.isEmpty()) {
             source.sendFailure(Component.literal("Nenhum companion chamado '" + name + "' foi encontrado."));
@@ -148,11 +142,7 @@ public class CompanionCommand {
             return 0;
         }
 
-        List<CompanionEntity> companions = player.level().getEntitiesOfClass(
-                CompanionEntity.class,
-                player.getBoundingBox().inflate(256),
-                c -> c.isOwner(player)
-        );
+        List<CompanionEntity> companions = findOwnedCompanions(player, null);
 
         if (companions.isEmpty()) {
             source.sendFailure(Component.literal("Você não tem companions para dispensar."));
@@ -252,6 +242,26 @@ public class CompanionCommand {
 
         source.sendSuccess(() -> Component.literal(sb.toString().trim()), false);
         return 1;
+    }
+
+    private static List<CompanionEntity> findOwnedCompanions(ServerPlayer player, @Nullable String name) {
+        List<CompanionEntity> companions = new ArrayList<>();
+        if (player.getServer() == null) {
+            return companions;
+        }
+
+        for (ServerLevel level : player.getServer().getAllLevels()) {
+            level.getEntities(LLMoblings.COMPANION.get(), entity -> {
+                if (entity instanceof CompanionEntity companion
+                        && companion.isOwner(player)
+                        && (name == null || companion.getCompanionName().equalsIgnoreCase(name))) {
+                    companions.add(companion);
+                }
+                return true;
+            });
+        }
+
+        return companions;
     }
 
     private static int showHelp(CommandContext<CommandSourceStack> ctx) {

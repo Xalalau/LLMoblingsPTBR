@@ -236,6 +236,11 @@ public final class ActionRegistry {
             return action;
         }
 
+        // action = tryResolveRelativePositionCommand(companion, sender, normalized);
+        // if (action != null) {
+        //     return action;
+        // }
+
         action = tryResolveMovementCommand(normalized);
         if (action != null) {
             return action;
@@ -302,7 +307,7 @@ public final class ActionRegistry {
             data.addProperty("x", ref.getX());
             data.addProperty("y", ref.getY());
             data.addProperty("z", ref.getZ());
-            data.addProperty("preferSenderChest", containsAny(normalized, "esse bau", "esse baú", "desse bau", "desse baú", "daqui", "aqui", "deste bau", "deste baú"));
+            data.addProperty("preferSenderChest", refersToSenderNearbyStorage(normalized));
             return new CompanionAction("takefromchest", null, data);
         }
 
@@ -312,11 +317,25 @@ public final class ActionRegistry {
             data.addProperty("item", resource);
             data.addProperty("count", extractRequestedCount(normalized));
             data.addProperty("keepGear", true);
+            if (sender != null && refersToSenderNearbyStorage(normalized)) {
+                BlockPos ref = sender.blockPosition();
+                data.addProperty("x", ref.getX());
+                data.addProperty("y", ref.getY());
+                data.addProperty("z", ref.getZ());
+                data.addProperty("preferSenderChest", true);
+            }
             return new CompanionAction("deposititem", null, data);
         }
 
         JsonObject data = new JsonObject();
         data.addProperty("keepGear", !containsAny(normalized, "tudo", "inclusive armadura", "inclusive arma"));
+        if (sender != null && refersToSenderNearbyStorage(normalized)) {
+            BlockPos ref = sender.blockPosition();
+            data.addProperty("x", ref.getX());
+            data.addProperty("y", ref.getY());
+            data.addProperty("z", ref.getZ());
+            data.addProperty("preferSenderChest", true);
+        }
         return new CompanionAction("deposit", null, data);
     }
 
@@ -412,6 +431,71 @@ public final class ActionRegistry {
         }
 
         return null;
+    }
+
+    private static @Nullable CompanionAction tryResolveRelativePositionCommand(
+        CompanionEntity companion,
+        @Nullable Player sender,
+        String normalized
+    ) {
+        boolean refersToPlayerFront = containsAny(
+            normalized,
+            "na minha frente",
+            "a minha frente",
+            "na frente de mim",
+            "na frente do jogador"
+        );
+        boolean refersToCompanionFront = containsAny(
+            normalized,
+            "na sua frente",
+            "a sua frente",
+            "na frente de voce",
+            "na frente de você"
+        );
+
+        if (!refersToPlayerFront && !refersToCompanionFront) {
+            return null;
+        }
+
+        if (!containsAny(
+            normalized,
+            "vai ", "va ", "vá ", "anda ", "andar ", "fica ", "pare ", "para ", "chega ", "se posiciona ", "posiciona "
+        )) {
+            return null;
+        }
+
+        BlockPos basePos;
+        net.minecraft.core.Direction direction;
+        if (refersToPlayerFront && sender != null) {
+            basePos = sender.blockPosition();
+            direction = sender.getDirection();
+        } else if (refersToCompanionFront) {
+            basePos = companion.blockPosition();
+            direction = companion.getDirection();
+        } else {
+            return null;
+        }
+
+        int distance = 2;
+        Matcher matcher = COUNT_PATTERN.matcher(normalized);
+        if (matcher.find()) {
+            distance = Math.max(1, Math.min(8, Integer.parseInt(matcher.group(1))));
+        }
+
+        BlockPos target = basePos.relative(direction, distance);
+        JsonObject data = new JsonObject();
+        data.addProperty("x", target.getX());
+        data.addProperty("y", target.getY());
+        data.addProperty("z", target.getZ());
+        return new CompanionAction("goto", null, data);
+    }
+
+    private static boolean refersToSenderNearbyStorage(String normalized) {
+        return containsAny(
+            normalized,
+            "esse bau", "esse baú", "desse bau", "desse baú", "deste bau", "deste baú",
+            "perto de mim", "aqui perto", "aqui comigo", "do meu lado", "perto daqui", "aqui"
+        );
     }
 
     private static @Nullable EquipmentSlot resolveRequestedArmorSlot(String normalized) {
